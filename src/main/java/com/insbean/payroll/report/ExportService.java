@@ -1,0 +1,453 @@
+package com.insbean.payroll.report;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.insbean.payroll.audit.AuditService;
+import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.domain.entity.PayPeriodEntity;
+import com.insbean.payroll.domain.entity.PayRecordEntity;
+import com.insbean.payroll.domain.entity.PayRecordItemEntity;
+import com.insbean.payroll.domain.entity.SysCompanyEntity;
+import com.insbean.payroll.org.mapper.CompanyMapper;
+import com.insbean.payroll.period.mapper.PeriodMapper;
+import com.insbean.payroll.record.ColumnSnapshotFactory;
+import com.insbean.payroll.record.dto.GridColumn;
+import com.insbean.payroll.record.mapper.PayRecordItemMapper;
+import com.insbean.payroll.record.mapper.PayRecordMapper;
+import com.insbean.payroll.report.dto.AnnualReportRow;
+import com.insbean.payroll.report.dto.ExportRequest;
+import com.insbean.payroll.report.dto.MonthlyReportRow;
+import com.insbean.payroll.report.dto.ReportExportParams;
+import com.insbean.payroll.report.dto.ReportQuery;
+import com.insbean.payroll.security.CurrentUser;
+import com.insbean.payroll.security.DataScopeEnforcer;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
+
+/**
+ * 报表导出（契约 POST /reports/export）。
+ *
+ * <p>四种报表共用一条"先准备、后落盘、再写审计"的流水线：
+ * prepare 全部成功之后才写审计与响应头，任何一步失败都不会留下"半截二进制响应"。
+ *
+ * <p>PERIOD_SHEET 的列取 {@code pay_period.column_snapshot} 而不是当前启用科目：
+ * 明细可能含生成后停用的科目，按当前字典导列会和合计对不上。
+ * PAYSLIP 只含姓名/工号/部门/工资项/合计，不含证件号、手机号、银行卡。
+ */
+@Slf4j
+@Service
+public class ExportService {
+
+    private static final String XLSX = "XLSX";
+    private static final String PERIOD_YM_PATTERN = "^[0-9]{4}-(0[1-9]|1[0-2])$";
+    private static final String YEAR_PATTERN = "^[0-9]{4}$";
+    private static final DateTimeFormatter STAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss").withZone(ZoneId.systemDefault());
+
+    private final ReportService reportService;
+    private final PayRecordMapper recordMapper;
+    private final PayRecordItemMapper recordItemMapper;
+    private final PeriodMapper periodMapper;
+    private final CompanyMapper companyMapper;
+    private final ColumnSnapshotFactory columnSnapshotFactory;
+    private final ObjectMapper objectMapper;
+    private final AuditService auditService;
+    private final DataScopeEnforcer dataScope;
+    private final ExcelWriter excelWriter;
+
+    public ExportService(ReportService reportService,
+                         PayRecordMapper recordMapper,
+                         PayRecordItemMapper recordItemMapper,
+                         PeriodMapper periodMapper,
+                         CompanyMapper companyMapper,
+                         ColumnSnapshotFactory columnSnapshotFactory,
+                         ObjectMapper objectMapper,
+                         AuditService auditService,
+                         DataScopeEnforcer dataScope,
+                         ExcelWriter excelWriter) {
+        this.reportService = reportService;
+        this.recordMapper = recordMapper;
+        this.recordItemMapper = recordItemMapper;
+        this.periodMapper = periodMapper;
+        this.companyMapper = companyMapper;
+        this.columnSnapshotFactory = columnSnapshotFactory;
+        this.objectMapper = objectMapper;
+        this.auditService = auditService;
+        this.dataScope = dataScope;
+        this.excelWriter = excelWriter;
+    }
+
+    public PreparedExport export(ExportRequest request) {
+        CurrentUser me = requireUser();
+        // 拦截器已按 @RequirePerm 拦过一层；服务层再校验一次，保证直接调用也安全
+        if (!me.has("payroll:export")) {
+            throw new BizException(403, "无导出权限");
+        }
+        if (request == null || request.reportType() == null) {
+            throw new BizException(400, "reportType 必填");
+        }
+        if (request.format() != null && !XLSX.equalsIgnoreCase(request.format())) {
+            throw new BizException(400, "当前仅支持 XLSX 格式");
+        }
+        ReportExportParams params = request.params();
+        if (params == null) {
+            throw new BizException(400, "params 必填");
+        }
+
+        String type = request.reportType().trim().toUpperCase();
+        String stamp = STAMP.format(Instant.now());
+        List<ExcelWriter.SheetData> sheets;
+        String filename;
+        String description;
+
+        switch (type) {
+            case "MONTHLY" -> {
+                requirePeriodYm(params);
+                List<MonthlyReportRow> rows = reportService.monthly(
+                        ReportQuery.monthly(params.periodYm(), params.companyId(), params.deptId()));
+                sheets = List.of(monthlySheet(rows));
+                filename = "monthly-" + params.periodYm() + "-" + stamp + ".xlsx";
+                description = describe(type, params);
+            }
+            case "ANNUAL" -> {
+                requireYearAndGroupBy(params);
+                List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual(
+                        params.year(), params.groupBy(), params.companyId(), params.deptId()));
+                Long sheetCompanyId = params.companyId() != null
+                        ? params.companyId()
+                        : (DataScopeEnforcer.ALL.equals(me.dataScope()) ? null : me.companyId());
+                sheets = List.of(annualSheet(params.year(), rows, sheetCompanyId));
+                String group = rows.isEmpty() ? "EMP" : rows.get(0).groupBy();
+                filename = "annual-" + params.year() + "-" + group + "-" + stamp + ".xlsx";
+                description = describe(type, params);
+            }
+            case "PERIOD_SHEET" -> {
+                requirePeriodYm(params);
+                sheets = periodSheets(params);
+                filename = "period-sheet-" + params.periodYm() + "-" + stamp + ".xlsx";
+                description = describe(type, params);
+            }
+            case "PAYSLIP" -> {
+                requirePeriodYm(params);
+                sheets = payslipSheets(params);
+                filename = "payslip-" + params.periodYm() + "-" + stamp + ".xlsx";
+                description = describe(type, params);
+            }
+            default -> throw new BizException(400, "不支持的报表类型：" + request.reportType());
+        }
+
+        PreparedExport prepared;
+        try {
+            prepared = excelWriter.write(filename, sheets);
+        } catch (IOException e) {
+            log.error("导出文件写出失败", e);
+            throw new BizException(500, "导出文件生成失败");
+        }
+        // 审计在响应头之前写：写不进去就不该把文件发出去（合规要求）
+        auditService.record("EXPORT", null, "EXPORT", type, null,
+                description + ";rows=" + prepared.rows());
+        return prepared;
+    }
+
+    // ------------------------------------------------------------------ MONTHLY / ANNUAL
+
+    private ExcelWriter.SheetData monthlySheet(List<MonthlyReportRow> rows) {
+        List<ExcelWriter.Column> columns = List.of(
+                ExcelWriter.Column.text("法人主体"),
+                ExcelWriter.Column.text("期间"),
+                ExcelWriter.Column.text("部门"),
+                ExcelWriter.Column.integer("人数"),
+                ExcelWriter.Column.money("应发合计"),
+                ExcelWriter.Column.money("扣款合计"),
+                ExcelWriter.Column.money("实发合计"));
+        List<List<Object>> data = rows.stream()
+                .map(r -> listOf(companyName(r.companyId()), r.periodYm(),
+                        r.deptName() == null ? String.valueOf(r.deptId()) : r.deptName(),
+                        r.employeeCount(), r.grossAmount(), r.deductionAmount(), r.netAmount()))
+                .toList();
+        return new ExcelWriter.SheetData("月度汇总", columns, data);
+    }
+
+    private ExcelWriter.SheetData annualSheet(String year, List<AnnualReportRow> rows, Long sheetCompanyId) {
+        boolean byEmployee = rows.isEmpty() || "EMP".equals(rows.get(0).groupBy());
+        List<ExcelWriter.Column> columns = new ArrayList<>();
+        columns.add(ExcelWriter.Column.text("年份"));
+        if (byEmployee) {
+            columns.add(ExcelWriter.Column.text("工号"));
+            columns.add(ExcelWriter.Column.text("姓名"));
+        } else {
+            columns.add(ExcelWriter.Column.text("法人主体"));
+            columns.add(ExcelWriter.Column.text("部门"));
+        }
+        columns.add(ExcelWriter.Column.integer("人数"));
+        columns.add(ExcelWriter.Column.money("应发合计"));
+        columns.add(ExcelWriter.Column.money("扣款合计"));
+        columns.add(ExcelWriter.Column.money("实发合计"));
+
+        List<List<Object>> data = rows.stream().map(r -> {
+            List<Object> row = new ArrayList<>();
+            row.add(year);
+            if (byEmployee) {
+                row.add(r.empNo());
+                row.add(r.empName());
+            } else {
+                row.add(companyName(sheetCompanyId));
+                row.add(r.deptName() == null ? String.valueOf(r.deptId()) : r.deptName());
+            }
+            row.add(r.employeeCount());
+            row.add(r.grossAmount());
+            row.add(r.deductionAmount());
+            row.add(r.netAmount());
+            return row;
+        }).toList();
+        return new ExcelWriter.SheetData(byEmployee ? "年度汇总-按人" : "年度汇总-按部门", columns, data);
+    }
+
+    // ------------------------------------------------------------------ PERIOD_SHEET
+
+    private List<ExcelWriter.SheetData> periodSheets(ReportExportParams params) {
+        List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), null);
+        if (records.isEmpty()) {
+            return List.of(emptyPaySheet("工资表-" + params.periodYm()));
+        }
+        Map<Long, List<PayRecordEntity>> byCompany = records.stream()
+                .collect(Collectors.groupingBy(PayRecordEntity::getCompanyId, TreeMap::new, Collectors.toList()));
+        Map<Long, Map<String, BigDecimal>> items = itemAmounts(records);
+
+        List<ExcelWriter.SheetData> sheets = new ArrayList<>();
+        byCompany.forEach((companyId, companyRecords) -> {
+            List<PayRecordItemEntity> companyItems = flattenItems(companyRecords, items);
+            List<GridColumn> itemColumns = columnsFor(companyId, params.periodYm(), companyItems);
+            sheets.add(paySheet(sheetName("工资表", companyId, params.periodYm()),
+                    itemColumns, companyRecords, items));
+        });
+        return sheets;
+    }
+
+    private ExcelWriter.SheetData emptyPaySheet(String name) {
+        List<ExcelWriter.Column> columns = List.of(
+                ExcelWriter.Column.text("工号"),
+                ExcelWriter.Column.text("姓名"),
+                ExcelWriter.Column.text("部门"),
+                ExcelWriter.Column.money("应发合计"),
+                ExcelWriter.Column.money("扣款合计"),
+                ExcelWriter.Column.money("实发合计"));
+        return new ExcelWriter.SheetData(name, columns, List.of());
+    }
+
+    // ------------------------------------------------------------------ PAYSLIP
+
+    private List<ExcelWriter.SheetData> payslipSheets(ReportExportParams params) {
+        List<Long> employeeIds = params.employeeIds();
+        List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), employeeIds);
+        if (records.isEmpty()) {
+            return List.of(emptyPaySheet("工资条-" + params.periodYm()));
+        }
+        Map<Long, Map<String, BigDecimal>> items = itemAmounts(records);
+
+        // 工资条跨主体时列取并集（同名列只出现一次），保证每行都对齐
+        Map<String, GridColumn> union = new LinkedHashMap<>();
+        Map<Long, List<PayRecordEntity>> byCompany = records.stream()
+                .collect(Collectors.groupingBy(PayRecordEntity::getCompanyId, TreeMap::new, Collectors.toList()));
+        byCompany.forEach((companyId, companyRecords) ->
+                columnsFor(companyId, params.periodYm(), flattenItems(companyRecords, items))
+                        .forEach(c -> union.putIfAbsent(c.itemCode(), c)));
+
+        return List.of(paySheet("工资条-" + params.periodYm(),
+                new ArrayList<>(union.values()), records, items));
+    }
+
+    // ------------------------------------------------------------------ 共用
+
+    private ExcelWriter.SheetData paySheet(String name, List<GridColumn> itemColumns,
+                                           List<PayRecordEntity> records,
+                                           Map<Long, Map<String, BigDecimal>> itemsByRecord) {
+        List<ExcelWriter.Column> columns = new ArrayList<>();
+        columns.add(ExcelWriter.Column.text("工号"));
+        columns.add(ExcelWriter.Column.text("姓名"));
+        columns.add(ExcelWriter.Column.text("部门"));
+        itemColumns.forEach(c -> columns.add(ExcelWriter.Column.money(c.itemName())));
+        columns.add(ExcelWriter.Column.money("应发合计"));
+        columns.add(ExcelWriter.Column.money("扣款合计"));
+        columns.add(ExcelWriter.Column.money("实发合计"));
+
+        List<List<Object>> rows = records.stream().map(r -> {
+            Map<String, BigDecimal> items = itemsByRecord
+                    .getOrDefault(r.getId(), Map.of());
+            List<Object> row = new ArrayList<>();
+            row.add(r.getEmpNo());
+            row.add(r.getEmpName());
+            row.add(r.getDeptName());
+            for (GridColumn column : itemColumns) {
+                row.add(items.get(column.itemCode()));
+            }
+            row.add(r.getGrossAmount());
+            row.add(r.getDeductionAmount());
+            row.add(r.getNetAmount());
+            return row;
+        }).toList();
+        return new ExcelWriter.SheetData(name, columns, rows);
+    }
+
+    /** 已锁定/已归档期间、未删除、且通过数据范围的核算记录。 */
+    private List<PayRecordEntity> lockedRecords(String periodYm, Long deptId, List<Long> employeeIds) {
+        LambdaQueryWrapper<PayRecordEntity> query = Wrappers.<PayRecordEntity>lambdaQuery()
+                .eq(PayRecordEntity::getDeleted, 0)
+                .eq(PayRecordEntity::getPeriodYm, periodYm)
+                .inSql(PayRecordEntity::getPeriodId, ReportService.LOCKED_PERIODS_SQL)
+                .orderByAsc(PayRecordEntity::getCompanyId)
+                .orderByAsc(PayRecordEntity::getDeptId)
+                .orderByAsc(PayRecordEntity::getEmpNo);
+        if (deptId != null) {
+            query.eq(PayRecordEntity::getDeptId, deptId);
+        }
+        if (employeeIds != null && !employeeIds.isEmpty()) {
+            query.in(PayRecordEntity::getEmployeeId, employeeIds);
+        }
+        dataScope.applyRecordFilter(query);
+        return recordMapper.selectList(query);
+    }
+
+    private Map<Long, Map<String, BigDecimal>> itemAmounts(List<PayRecordEntity> records) {
+        Map<Long, Map<String, BigDecimal>> result = new LinkedHashMap<>();
+        if (records.isEmpty()) {
+            return result;
+        }
+        List<PayRecordItemEntity> items = recordItemMapper.findByRecordIds(
+                records.stream().map(PayRecordEntity::getId).toList());
+        Map<Long, Map<String, BigDecimal>> byRecord = new LinkedHashMap<>();
+        for (PayRecordItemEntity item : items) {
+            byRecord.computeIfAbsent(item.getRecordId(), k -> new LinkedHashMap<>())
+                    .put(item.getItemCode(), item.getAmount());
+        }
+        for (PayRecordEntity record : records) {
+            result.put(record.getId(), byRecord.getOrDefault(record.getId(), Map.of()));
+        }
+        return result;
+    }
+
+    private static List<PayRecordItemEntity> flattenItems(
+            List<PayRecordEntity> records,
+            Map<Long, Map<String, BigDecimal>> itemsByRecord) {
+        List<PayRecordItemEntity> flattened = new ArrayList<>();
+        for (PayRecordEntity record : records) {
+            Map<String, BigDecimal> items = itemsByRecord.getOrDefault(record.getId(), Map.of());
+            items.forEach((code, amount) -> {
+                PayRecordItemEntity entity = new PayRecordItemEntity();
+                entity.setRecordId(record.getId());
+                entity.setItemCode(code);
+                entity.setAmount(amount);
+                flattened.add(entity);
+            });
+        }
+        return flattened;
+    }
+
+    /**
+     * 工资表列：优先用期间生成时写下的 column_snapshot（含已停用但有明细的科目）；
+     * 快照缺失时才退回"启用科目 ∪ 本期有明细的科目"。
+     */
+    private List<GridColumn> columnsFor(Long companyId, String periodYm, List<PayRecordItemEntity> items) {
+        PayPeriodEntity period = periodMapper.selectOne(Wrappers.<PayPeriodEntity>lambdaQuery()
+                .eq(PayPeriodEntity::getCompanyId, companyId)
+                .eq(PayPeriodEntity::getPeriodYm, periodYm)
+                .last("LIMIT 1"));
+        if (period != null && period.getColumnSnapshot() != null && !period.getColumnSnapshot().isBlank()) {
+            try {
+                List<GridColumn> snapshot = objectMapper.readValue(period.getColumnSnapshot(),
+                        new TypeReference<>() {
+                        });
+                if (!snapshot.isEmpty()) {
+                    return snapshot;
+                }
+            } catch (IOException e) {
+                log.warn("列快照解析失败，退回当前科目：periodId={}", period.getId(), e);
+            }
+        }
+        return columnSnapshotFactory.build(companyId, items);
+    }
+
+    private String sheetName(String prefix, Long companyId, String periodYm) {
+        SysCompanyEntity company = companyMapper.selectById(companyId);
+        String code = company == null ? String.valueOf(companyId) : company.getCompanyCode();
+        return prefix + "-" + code + "-" + periodYm;
+    }
+
+    private String companyName(Long companyId) {
+        if (companyId == null) {
+            return "";
+        }
+        String name = companyMapper.findNameById(companyId);
+        return name == null ? String.valueOf(companyId) : name;
+    }
+
+    private static void requirePeriodYm(ReportExportParams params) {
+        if (params.periodYm() == null || !params.periodYm().matches(PERIOD_YM_PATTERN)) {
+            throw new BizException(400, "periodYm 必填且格式为 YYYY-MM");
+        }
+    }
+
+    private static void requireYearAndGroupBy(ReportExportParams params) {
+        if (params.year() == null || !params.year().matches(YEAR_PATTERN)) {
+            throw new BizException(400, "year 必填且格式为 YYYY");
+        }
+        if (params.groupBy() == null || params.groupBy().isBlank()) {
+            throw new BizException(400, "groupBy 必填（EMP 或 DEPT）");
+        }
+        // 与查询接口同一套校验（含 companyId 必填规则）
+        ReportService.normalizeGroupBy(params.groupBy());
+    }
+
+    private static String describe(String type, ReportExportParams params) {
+        StringBuilder sb = new StringBuilder("type=").append(type);
+        if (params.periodYm() != null) {
+            sb.append(";periodYm=").append(params.periodYm());
+        }
+        if (params.year() != null) {
+            sb.append(";year=").append(params.year());
+        }
+        if (params.groupBy() != null) {
+            sb.append(";groupBy=").append(params.groupBy());
+        }
+        if (params.companyId() != null) {
+            sb.append(";companyId=").append(params.companyId());
+        }
+        if (params.deptId() != null) {
+            sb.append(";deptId=").append(params.deptId());
+        }
+        if (params.employeeIds() != null) {
+            sb.append(";employeeIds=").append(params.employeeIds());
+        }
+        return sb.toString();
+    }
+
+    private static List<Object> listOf(Object... values) {
+        List<Object> list = new ArrayList<>(values.length);
+        for (Object value : values) {
+            list.add(value);
+        }
+        return list;
+    }
+
+    private static CurrentUser requireUser() {
+        CurrentUser current = CurrentUser.get();
+        if (current == null) {
+            throw new BizException(401, "未认证或登录已过期");
+        }
+        return current;
+    }
+}
