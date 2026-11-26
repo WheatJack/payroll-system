@@ -23,6 +23,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
+import { sumMoneyColumn } from '@/utils/report'
 import { buildPayslipParams, buildPeriodSheetParams } from '@/utils/export'
 import { parseClipboardMatrix } from '@/utils/paste'
 
@@ -185,10 +186,8 @@ const totals = computed(() => {
   const perColumn: Record<string, string> = {}
   const sourceRows = store.visibleRows
   for (const column of store.columns) {
-    perColumn[column.itemCode] = sourceRows.reduce(
-      (acc, row) => add(acc, store.valueOf(row.recordId, column.itemCode)),
-      '0.00',
-    )
+    // sumMoneyColumn 对空串/非法值兜底，避免一格脏数据把整个合计 computed 抛崩
+    perColumn[column.itemCode] = sumMoneyColumn(sourceRows, (row) => store.valueOf(row.recordId, column.itemCode))
   }
   const gross = store.columns
     .filter((column) => column.direction === 1)

@@ -185,6 +185,8 @@ async function reopen(id?: string) {
     ElMessage.warning('请输入批次号')
     return
   }
+  // 先停掉上一个批次的轮询，否则旧 token 的 tick 会把 batch 覆盖回旧批次
+  stopPolling()
   try {
     batch.value = await importApi.getImportBatch(target)
     reopenBatchId.value = batch.value.batchId

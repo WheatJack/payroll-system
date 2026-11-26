@@ -14,7 +14,7 @@ import { listPayItems } from '@/api/item'
 import { isApiError } from '@/api/client'
 import type { CompProfile, PayItem } from '@/api/models'
 import MoneyInput from '@/components/MoneyInput.vue'
-import { compare, format, round } from '@/utils/money'
+import { compare, formatOrZero, round } from '@/utils/money'
 
 const props = defineProps<{
   employeeId: string
@@ -188,7 +188,7 @@ defineExpose({ reload: load, canEdit })
       <template v-if="currentProfile">
         <div class="base-line">
           <span class="base-label">基本工资</span>
-          <span class="base-amount">{{ format(currentProfile.baseSalary) }}</span>
+          <span class="base-amount">{{ formatOrZero(currentProfile.baseSalary) }}</span>
         </div>
         <div class="meta-line">
           <span>生效日期：{{ currentProfile.effectiveFrom }}</span>
@@ -196,7 +196,7 @@ defineExpose({ reload: load, canEdit })
         </div>
         <div v-if="currentProfile.items.length" class="items-line">
           <el-tag v-for="item in currentProfile.items" :key="item.itemCode" size="small" type="info" class="item-tag">
-            {{ itemLabel(item.itemCode) }} {{ format(item.amount) }}
+            {{ itemLabel(item.itemCode) }} {{ formatOrZero(item.amount) }}
           </el-tag>
         </div>
         <div v-else class="muted">无固定津贴</div>
@@ -216,7 +216,7 @@ defineExpose({ reload: load, canEdit })
         >
           <div class="timeline-item">
             <div class="timeline-head">
-              <span class="timeline-amount">基本工资 {{ format(profile.baseSalary) }}</span>
+              <span class="timeline-amount">基本工资 {{ formatOrZero(profile.baseSalary) }}</span>
               <el-tag :type="profile.status === 1 ? 'success' : 'info'" size="small">
                 {{ profile.status === 1 ? '有效' : '已作废' }}
               </el-tag>
@@ -224,7 +224,7 @@ defineExpose({ reload: load, canEdit })
             </div>
             <div v-if="profile.items.length" class="timeline-items">
               <span v-for="item in profile.items" :key="item.itemCode" class="timeline-item-tag">
-                {{ itemLabel(item.itemCode) }} {{ format(item.amount) }}
+                {{ itemLabel(item.itemCode) }} {{ formatOrZero(item.amount) }}
               </span>
             </div>
             <div v-if="profile.changeReason" class="muted">原因：{{ profile.changeReason }}</div>

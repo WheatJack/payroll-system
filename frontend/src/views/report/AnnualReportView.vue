@@ -142,6 +142,9 @@ watch(
   () => {
     // 列结构随维度变化：作废在途请求，切换后必须重新取数
     latest.invalidate()
+    // 在途请求的 finally 因 isLatest 为假不会再复位 loading，这里必须手动复位，
+    // 否则「切到 DEPT 且未选主体」时会一直转圈
+    loading.value = false
     rows.value = []
     filters.value.deptId = ''
     if (validateAnnualFilters(filters.value, auth.user?.dataScope) === null) {

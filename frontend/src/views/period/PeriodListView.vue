@@ -7,7 +7,7 @@ import * as periodApi from '@/api/period'
 import { isApiError } from '@/api/client'
 import type { Period, PeriodStatus, RunProgress } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
-import { format } from '@/utils/money'
+import { formatOrZero } from '@/utils/money'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -243,12 +243,12 @@ onMounted(load)
       <el-table-column prop="employeeCount" label="人数" width="90" />
       <el-table-column label="应发合计" width="150" align="right">
         <template #default="{ row }">
-          <span class="amount-cell">{{ format(row.totalGross) }}</span>
+          <span class="amount-cell">{{ formatOrZero(row.totalGross) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="实发合计" width="150" align="right">
         <template #default="{ row }">
-          <span class="amount-cell">{{ format(row.totalNet) }}</span>
+          <span class="amount-cell">{{ formatOrZero(row.totalNet) }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="hpd" label="计薪天数" width="100" align="right" />

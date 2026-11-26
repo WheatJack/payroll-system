@@ -7,7 +7,7 @@
  * - `employeeCount` 是去重人数，年度值不等于各月相加，不能用「年度 ÷ 12」反推。
  */
 import type { DataScope, ReportGroupBy } from '@/api/models'
-import { sum } from './money'
+import { coerce, sum } from './money'
 
 const PERIOD_YM = /^\d{4}-(0[1-9]|1[0-2])$/
 const YEAR = /^\d{4}$/
@@ -42,9 +42,19 @@ export function validateAnnualFilters(
   return null
 }
 
-/** 金额列合计：逐项 money.add，不做二次舍入；空集合计为 0.00。 */
+/**
+ * 金额列合计：逐项 money.add，不做二次舍入；空集合计为 0.00。
+ * 每一格先做兜底（空串/非法/带千分位都能处理），避免后端直出的脏值把整个 computed 抛崩。
+ */
 export function sumMoneyColumn<T>(rows: readonly T[], pick: (row: T) => string | null | undefined): string {
-  return sum(rows.map((row) => pick(row) ?? '0.00'), '0.00')
+  return sum(
+    rows.map((row) => {
+      const value = pick(row)
+      if (value === null || value === undefined) return '0.00'
+      return coerce(value) ?? '0.00'
+    }),
+    '0.00',
+  )
 }
 
 /** 人数列合计（整数，非金额）。 */

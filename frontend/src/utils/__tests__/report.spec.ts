@@ -35,6 +35,11 @@ describe('报表合计', () => {
     expect(sumMoneyColumn(rows, (row) => row.amount)).toBe('100.00')
   })
 
+  test('空串/非法金额不抛错，按 0.00 计入；千分位能清洗', () => {
+    const rows = [{ amount: '' }, { amount: 'abc' }, { amount: '1,234.50' }, { amount: '0.50' }]
+    expect(sumMoneyColumn(rows, (row) => row.amount)).toBe('1235.00')
+  })
+
   test('空数组合计为 0.00', () => {
     expect(sumMoneyColumn([], () => '0.00')).toBe('0.00')
   })
