@@ -15,14 +15,19 @@ import { saveBlob } from '@/api/download'
 import type { AnnualReportRow, ReportGroupBy } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
-import { format } from '@/utils/money'
+import { format, formatOrZero } from '@/utils/money'
 import { sumCountColumn, sumMoneyColumn, validateAnnualFilters } from '@/utils/report'
+import { buildAnnualParams } from '@/utils/export'
+import { createLatestOnly } from '@/utils/latest'
 
 const auth = useAuthStore()
 const canExport = computed(() => auth.has('payroll:export'))
 const isGroupScope = computed(() => auth.user?.dataScope === 'ALL')
 
 const { companies, deptTree, loadCompanies, loadDepts } = useOrgOptions()
+
+/** 查询防竞态：切维度/连点查询时，旧响应后到不得覆盖新结果。 */
+const latest = createLatestOnly()
 
 const currentYear = new Date().getFullYear()
 const yearOptions = Array.from({ length: 6 }, (_, index) => String(currentYear - index))
@@ -47,21 +52,25 @@ async function query() {
     ElMessage.warning(invalid)
     return
   }
+  const token = latest.next()
   loading.value = true
   loadError.value = ''
   try {
-    rows.value = await reportApi.getAnnualReport({
+    const data = await reportApi.getAnnualReport({
       year: filters.value.year,
       groupBy: filters.value.groupBy,
       ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
       ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
     })
+    if (!latest.isLatest(token)) return
+    rows.value = data
   } catch (error) {
+    if (!latest.isLatest(token)) return
     rows.value = []
     loadError.value = isApiError(error) ? error.message : '年度汇总加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (latest.isLatest(token)) loading.value = false
   }
 }
 
@@ -101,12 +110,12 @@ async function exportReport() {
     const file = await reportApi.exportReport(
       {
         reportType: 'ANNUAL',
-        params: {
-          year: filters.value.year,
-          groupBy: filters.value.groupBy,
-          ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
-          ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
-        },
+        params: buildAnnualParams(
+          filters.value.year,
+          filters.value.groupBy,
+          filters.value.companyId,
+          filters.value.deptId,
+        ),
         format: 'XLSX',
       },
       `annual-${filters.value.year}-${filters.value.groupBy}.xlsx`,
@@ -131,7 +140,8 @@ watch(
 watch(
   () => filters.value.groupBy,
   () => {
-    // 列结构随维度变化，切换后必须重新取数，否则会把「按人」的行渲染进「按部门」的列
+    // 列结构随维度变化：作废在途请求，切换后必须重新取数
+    latest.invalidate()
     rows.value = []
     filters.value.deptId = ''
     if (validateAnnualFilters(filters.value, auth.user?.dataScope) === null) {
@@ -212,13 +222,13 @@ onMounted(() => {
       </template>
       <el-table-column prop="employeeCount" label="人数" width="90" align="right" />
       <el-table-column prop="grossAmount" label="应发合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.grossAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.grossAmount) }}</span></template>
       </el-table-column>
       <el-table-column prop="deductionAmount" label="扣款合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.deductionAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.deductionAmount) }}</span></template>
       </el-table-column>
       <el-table-column prop="netAmount" label="实发合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.netAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.netAmount) }}</span></template>
       </el-table-column>
       <template #empty>
         <el-empty description="该年度没有可统计的已锁定数据" :image-size="90" />

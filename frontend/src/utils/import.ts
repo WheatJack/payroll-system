@@ -39,3 +39,23 @@ export function batchSummary(batch: ImportBatchView): string {
 export function isReadyToCommit(batch: ImportBatchView | null): boolean {
   return !!batch && batch.status === 'VALIDATED' && batch.failRows === 0
 }
+
+/* ------------------------------ 异步校验轮询 ------------------------------ */
+
+export const IMPORT_POLL_INTERVAL_MS = 1000
+export const IMPORT_POLL_MAX_ATTEMPTS = 60
+
+/** 终态：不再轮询（COMMITTED 也视为终态，避免重复提交后继续打接口）。 */
+export function isTerminalBatchStatus(status: ImportBatchStatus | string): boolean {
+  return status === 'VALIDATED' || status === 'FAILED' || status === 'COMMITTED'
+}
+
+/** 契约：`status=VALIDATING` 时可轮询 `GET /import/{batchId}` 获取进度。 */
+export function shouldKeepPolling(status: ImportBatchStatus | string): boolean {
+  return status === 'VALIDATING'
+}
+
+/** 轮询次数是否已耗尽（超时后给手动刷新入口）。 */
+export function pollExhausted(attempts: number, max = IMPORT_POLL_MAX_ATTEMPTS): boolean {
+  return attempts >= max
+}

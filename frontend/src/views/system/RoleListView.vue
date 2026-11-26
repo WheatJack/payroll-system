@@ -119,6 +119,8 @@ async function submit() {
         status: form.status,
       })
       ElMessage.success('角色已保存')
+      // 角色（含数据范围）可能属于当前用户，刷新一次权限点
+      await auth.fetchMe().catch(() => undefined)
     } else {
       await systemApi.createRole({
         companyId: filters.companyId || auth.companyId,
@@ -171,6 +173,8 @@ async function submitGrant() {
   granting.value = true
   try {
     await systemApi.replaceRoleGrants(grantTarget.value.id, grantSelection.value)
+    // 授权可能改到当前用户自己的角色：立即刷新权限点，菜单/按钮才不会停留在旧状态
+    await auth.fetchMe().catch(() => undefined)
     ElMessage.success('权限点已更新')
     grantVisible.value = false
     await load()
@@ -194,6 +198,7 @@ async function remove(row: Role) {
   }
   try {
     await systemApi.deleteRole(row.id)
+    await auth.fetchMe().catch(() => undefined)
     ElMessage.success('角色已删除')
     await load()
   } catch (error) {

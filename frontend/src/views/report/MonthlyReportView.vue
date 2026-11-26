@@ -13,13 +13,19 @@ import { saveBlob } from '@/api/download'
 import type { MonthlyReportRow } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
-import { format } from '@/utils/money'
+import { format, formatOrZero } from '@/utils/money'
 import { sumCountColumn, sumMoneyColumn, validateMonthlyFilters } from '@/utils/report'
+import { buildMonthlyParams } from '@/utils/export'
+import { createLatestOnly } from '@/utils/latest'
 
 const auth = useAuthStore()
 const canExport = computed(() => auth.has('payroll:export'))
+const isGroupScope = computed(() => auth.user?.dataScope === 'ALL')
 
 const { companies, deptTree, loadCompanies, loadDepts } = useOrgOptions()
+
+/** 查询防竞态：旧响应后到不得覆盖新结果。 */
+const latest = createLatestOnly()
 
 /** 默认取上个月：报表只统计已锁定期间，当月通常还没锁。 */
 function previousMonth(): string {
@@ -31,7 +37,8 @@ function previousMonth(): string {
 
 const filters = ref({
   periodYm: previousMonth(),
-  companyId: auth.companyId || '',
+  // 集团数据范围默认不限定主体（避免悄悄只看到本公司）；其它范围默认本公司
+  companyId: isGroupScope.value ? '' : auth.companyId || '',
   deptId: '',
 })
 
@@ -48,20 +55,24 @@ async function query() {
     ElMessage.warning(invalid)
     return
   }
+  const token = latest.next()
   loading.value = true
   loadError.value = ''
   try {
-    rows.value = await reportApi.getMonthlyReport({
+    const data = await reportApi.getMonthlyReport({
       periodYm: filters.value.periodYm,
       ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
       ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
     })
+    if (!latest.isLatest(token)) return
+    rows.value = data
   } catch (error) {
+    if (!latest.isLatest(token)) return
     rows.value = []
     loadError.value = isApiError(error) ? error.message : '月度汇总加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (latest.isLatest(token)) loading.value = false
   }
 }
 
@@ -102,11 +113,7 @@ async function exportReport() {
     const file = await reportApi.exportReport(
       {
         reportType: 'MONTHLY',
-        params: {
-          periodYm: filters.value.periodYm,
-          ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
-          ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
-        },
+        params: buildMonthlyParams(filters.value.periodYm, filters.value.companyId, filters.value.deptId),
         format: 'XLSX',
       },
       `monthly-${filters.value.periodYm}.xlsx`,
@@ -160,12 +167,19 @@ onMounted(() => {
         />
         <el-button type="primary" :icon="Search" @click="query">查询</el-button>
         <span class="muted">仅统计已锁定/已归档期间；数据范围由后端过滤</span>
-      </div>
-      <div class="toolbar-actions">
+      </div>      <div class="toolbar-actions">
         <el-button v-if="canExport" :icon="Download" :loading="exporting" @click="exportReport">导出 xlsx</el-button>
       </div>
     </div>
 
+    <el-alert
+      v-if="isGroupScope && !filters.companyId"
+      title="当前账号是集团数据范围：未选择法人主体时将汇总数据范围内全部主体"
+      type="info"
+      show-icon
+      :closable="false"
+      class="list-error"
+    />
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" class="list-error" />
 
     <el-table
@@ -183,13 +197,13 @@ onMounted(() => {
       </el-table-column>
       <el-table-column prop="employeeCount" label="人数" width="90" align="right" />
       <el-table-column prop="grossAmount" label="应发合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.grossAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.grossAmount) }}</span></template>
       </el-table-column>
       <el-table-column prop="deductionAmount" label="扣款合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.deductionAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.deductionAmount) }}</span></template>
       </el-table-column>
       <el-table-column prop="netAmount" label="实发合计" width="160" align="right">
-        <template #default="{ row }"><span class="amount-cell">{{ format(row.netAmount) }}</span></template>
+        <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.netAmount) }}</span></template>
       </el-table-column>
       <template #empty>
         <el-empty :description="hasRows ? '' : '该期间没有可统计的已锁定数据'" :image-size="90" />

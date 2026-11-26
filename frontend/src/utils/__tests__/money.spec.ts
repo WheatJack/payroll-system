@@ -1,4 +1,4 @@
-import { add, coerce, compare, div, eq, format, isZero, mul, neg, round, round2, sub, sum } from '../money'
+import { add, coerce, compare, div, eq, format, formatOrZero, isZero, mul, neg, round, round2, sub, sum } from '../money'
 import { parseClipboardMatrix } from '../paste'
 
 describe('money 金额运算（字符串进字符串出）', () => {
@@ -76,6 +76,15 @@ describe('money 的精度边界：乘除、负数、HALF_UP 与 scale ≠ 2', ()
     expect(eq('-0.00', '0')).toBe(true)
     expect(eq('1.2340', '1.234')).toBe(true)
     expect(eq('1.234', '1.235')).toBe(false)
+  })
+
+  test('formatOrZero 对空值/非法金额兜底为 0.00，不抛错', () => {
+    expect(formatOrZero('')).toBe('0.00')
+    expect(formatOrZero(null)).toBe('0.00')
+    expect(formatOrZero(undefined)).toBe('0.00')
+    expect(formatOrZero('abc')).toBe('0.00')
+    expect(formatOrZero('1234.5')).toBe('1,234.50')
+    expect(formatOrZero('-0.5')).toBe('-0.50')
   })
 })
 

@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { batchSummary, canCommit, commitBlockedReason, isReadyToCommit } from '../import'
+import {
+  batchSummary,
+  canCommit,
+  commitBlockedReason,
+  isReadyToCommit,
+  isTerminalBatchStatus,
+  pollExhausted,
+  shouldKeepPolling,
+} from '../import'
 
 function batch(overrides: Partial<Parameters<typeof commitBlockedReason>[0]> = {}) {
   return {
@@ -49,5 +57,28 @@ describe('导入批次能否提交', () => {
     expect(batchSummary(batch({ totalRows: 12, successRows: 10, failRows: 2 }))).toBe(
       '共 12 行：成功 10 行，失败 2 行',
     )
+  })
+})
+
+describe('异步预校验轮询', () => {
+  test('VALIDATING 需要继续轮询，其余终态停止', () => {
+    expect(shouldKeepPolling('VALIDATING')).toBe(true)
+    expect(shouldKeepPolling('VALIDATED')).toBe(false)
+    expect(shouldKeepPolling('FAILED')).toBe(false)
+    expect(shouldKeepPolling('COMMITTED')).toBe(false)
+  })
+
+  test('终态判定包含 VALIDATED / FAILED / COMMITTED', () => {
+    expect(isTerminalBatchStatus('VALIDATED')).toBe(true)
+    expect(isTerminalBatchStatus('FAILED')).toBe(true)
+    expect(isTerminalBatchStatus('COMMITTED')).toBe(true)
+    expect(isTerminalBatchStatus('VALIDATING')).toBe(false)
+  })
+
+  test('轮询次数耗尽判定', () => {
+    expect(pollExhausted(0)).toBe(false)
+    expect(pollExhausted(59)).toBe(false)
+    expect(pollExhausted(60)).toBe(true)
+    expect(pollExhausted(3, 3)).toBe(true)
   })
 })

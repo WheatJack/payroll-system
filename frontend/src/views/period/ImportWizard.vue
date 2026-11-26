@@ -7,7 +7,7 @@
  * - 同文件重复上传/重复提交由后端 409，前端给出人话提示
  * - 刷新后可按批次号回捞（GET /import/{batchId}）
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { Back, Download, Refresh, UploadFilled } from '@element-plus/icons-vue'
@@ -16,7 +16,18 @@ import { isApiError } from '@/api/client'
 import { saveBlob } from '@/api/download'
 import type { ImportBizType, ImportCommitResult, ImportMode } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
-import { batchSummary, canCommit, commitBlockedReason, isReadyToCommit, type ImportBatchView } from '@/utils/import'
+import {
+  IMPORT_POLL_INTERVAL_MS,
+  IMPORT_POLL_MAX_ATTEMPTS,
+  batchSummary,
+  canCommit,
+  commitBlockedReason,
+  isReadyToCommit,
+  isTerminalBatchStatus,
+  pollExhausted,
+  shouldKeepPolling,
+  type ImportBatchView,
+} from '@/utils/import'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,9 +56,72 @@ const errorMessage = ref('')
 const blockedReason = computed(() => commitBlockedReason(batch.value, canSubmit.value))
 const commitEnabled = computed(() => canCommit(batch.value, canSubmit.value) && !committing.value)
 const ready = computed(() => isReadyToCommit(batch.value))
+const validatingAsync = computed(() => batch.value?.status === 'VALIDATING')
+
+/* ------------------------- 异步预校验轮询 ------------------------- */
+
+const pollTimedOut = ref(false)
+let pollTimer: number | undefined
+let pollToken = 0
+let pollAttempts = 0
+
+function syncBatchQuery(batchId: string): void {
+  void router.replace({ query: { ...route.query, batchId } })
+}
+
+function stopPolling(): void {
+  if (pollTimer !== undefined) {
+    window.clearTimeout(pollTimer)
+    pollTimer = undefined
+  }
+  pollToken += 1
+}
+
+async function pollBatch(batchId: string, token: number): Promise<void> {
+  if (token !== pollToken) return
+  pollAttempts += 1
+  try {
+    const next = await importApi.getImportBatch(batchId)
+    if (token !== pollToken) return
+    batch.value = next
+    if (isTerminalBatchStatus(next.status)) {
+      stopPolling()
+      if (next.status === 'VALIDATED') ElMessage.success(`预校验完成：${batchSummary(next)}`)
+      else if (next.status === 'FAILED') ElMessage.error('预校验失败，请检查文件后重新上传')
+      return
+    }
+  } catch (error) {
+    if (token !== pollToken) return
+    stopPolling()
+    ElMessage.error(isApiError(error) ? error.message : '批次进度查询失败')
+    return
+  }
+  if (pollExhausted(pollAttempts, IMPORT_POLL_MAX_ATTEMPTS)) {
+    stopPolling()
+    pollTimedOut.value = true
+    return
+  }
+  pollTimer = window.setTimeout(() => void pollBatch(batchId, token), IMPORT_POLL_INTERVAL_MS)
+}
+
+function startPolling(batchId: string): void {
+  stopPolling()
+  pollAttempts = 0
+  pollTimedOut.value = false
+  const token = ++pollToken
+  pollTimer = window.setTimeout(() => void pollBatch(batchId, token), IMPORT_POLL_INTERVAL_MS)
+}
+
+/** 超时后的手动刷新入口。 */
+async function refreshBatch(): Promise<void> {
+  if (!batch.value) return
+  await reopen(batch.value.batchId)
+}
 
 function onFileChange(uploadFile: UploadFile): void {
   if (!uploadFile.raw) return
+  stopPolling()
+  pollTimedOut.value = false
   selectedFile.value = uploadFile.raw
   fileList.value = [uploadFile]
   batch.value = null
@@ -89,7 +163,13 @@ async function validate() {
       importMode: importMode.value,
     })
     reopenBatchId.value = batch.value.batchId
-    ElMessage.success(`预校验完成：${batchSummary(batch.value)}`)
+    syncBatchQuery(batch.value.batchId)
+    if (shouldKeepPolling(batch.value.status)) {
+      ElMessage.info('预校验处理中，正在自动刷新进度…')
+      startPolling(batch.value.batchId)
+    } else {
+      ElMessage.success(`预校验完成：${batchSummary(batch.value)}`)
+    }
   } catch (error) {
     batch.value = null
     errorMessage.value = isApiError(error) ? error.message : '预校验失败，请稍后重试'
@@ -108,8 +188,15 @@ async function reopen(id?: string) {
   try {
     batch.value = await importApi.getImportBatch(target)
     reopenBatchId.value = batch.value.batchId
+    syncBatchQuery(batch.value.batchId)
     commitResult.value = null
-    ElMessage.success(`已载入批次 ${batch.value.batchId}（${batch.value.status}）`)
+    pollTimedOut.value = false
+    if (shouldKeepPolling(batch.value.status)) {
+      startPolling(batch.value.batchId)
+      ElMessage.info('批次仍在预校验中，正在自动刷新进度…')
+    } else {
+      ElMessage.success(`已载入批次 ${batch.value.batchId}（${batch.value.status}）`)
+    }
   } catch (error) {
     ElMessage.error(isApiError(error) ? error.message : '批次查询失败')
   }
@@ -163,6 +250,17 @@ async function commit() {
 function backToGrid() {
   void router.push({ name: 'payroll-grid', params: { id: periodId.value } })
 }
+
+onMounted(() => {
+  // 批次号写进 URL：刷新/分享链接后可继续
+  const fromQuery = typeof route.query.batchId === 'string' ? route.query.batchId : ''
+  if (fromQuery) {
+    reopenBatchId.value = fromQuery
+    void reopen(fromQuery)
+  }
+})
+
+onBeforeUnmount(stopPolling)
 </script>
 
 <template>
@@ -242,6 +340,7 @@ function backToGrid() {
       <div class="section-title">3. 预校验结果</div>
       <div class="section-body column">
         <div class="row">
+          <el-tag v-if="validatingAsync" type="warning" size="small">预校验中…</el-tag>
           <el-tag type="success" size="small">成功 {{ batch.successRows }} 行</el-tag>
           <el-tag :type="batch.failRows > 0 ? 'danger' : 'info'" size="small">失败 {{ batch.failRows }} 行</el-tag>
           <span class="muted">{{ batchSummary(batch) }}</span>
@@ -257,6 +356,17 @@ function backToGrid() {
           </el-button>
           <span v-else-if="batch.failRows > 0" class="muted">错误报告需要 payroll:export 权限</span>
         </div>
+
+        <el-alert
+          v-if="pollTimedOut"
+          title="轮询超时，批次可能仍在处理中"
+          type="warning"
+          show-icon
+          :closable="false"
+          class="poll-alert"
+        >
+          <el-button link type="primary" @click="refreshBatch">手动刷新批次状态</el-button>
+        </el-alert>
 
         <el-table v-if="batch.errors.length" :data="batch.errors" border size="small" max-height="260">
           <el-table-column prop="rowNo" label="行号" width="80" />
@@ -343,5 +453,8 @@ function backToGrid() {
 .blocked-alert {
   flex: 1;
   min-width: 320px;
+}
+.poll-alert {
+  margin: 8px 0;
 }
 </style>

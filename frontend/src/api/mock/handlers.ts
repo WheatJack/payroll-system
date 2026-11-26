@@ -20,6 +20,7 @@ import type {
   Role,
   RoleCreateRequest,
   RoleUpdateRequest,
+  CurrentUser,
   RunProgress,
   User,
   UserCreateRequest,
@@ -32,6 +33,7 @@ import {
   COMPANIES,
   COMP_PROFILES,
   DEMO_TOKEN,
+  DEMO_TOKENS,
   DEMO_USER,
   DEPTS,
   EMPLOYEES,
@@ -43,6 +45,7 @@ import {
   PERMISSIONS,
   ROLES,
   USERS,
+  VIEWER_USER,
   clone,
 } from './fixtures'
 
@@ -62,9 +65,18 @@ const ok = (data: unknown) => HttpResponse.json({ code: 0, msg: 'ok', data })
 const fail = (status: number, msg: string, data: unknown = null) =>
   HttpResponse.json({ code: status, msg, data }, { status })
 
-function requireAuth(request: Request): Response | null {
+function currentUserOf(request: Request): CurrentUser | null {
   const header = request.headers.get('Authorization') ?? ''
-  return header === `Bearer ${DEMO_TOKEN}` ? null : fail(401, '未认证或登录已过期')
+  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+  return DEMO_TOKENS[token] ?? null
+}
+
+function requireAuth(request: Request): Response | null {
+  return currentUserOf(request) ? null : fail(401, '未认证或登录已过期')
+}
+
+function hasPermission(request: Request, code: string): boolean {
+  return currentUserOf(request)?.permissions.includes(code) ?? false
 }
 
 const state = {
@@ -90,7 +102,10 @@ const state = {
 
 /** 导入批次（M1.5）：预校验持久化，提交后标记已提交，同名文件拒绝重复导入。 */
 const importState = {
-  batches: new Map<string, { result: ImportValidateResult; fileName: string; committed: boolean }>(),
+  batches: new Map<
+    string,
+    { result: ImportValidateResult; fileName: string; committed: boolean; readyAt?: number }
+  >(),
   committedFileNames: new Set<string>(),
   nextId: 1,
 }
@@ -155,15 +170,18 @@ export const handlers = [
     if (!body?.username || !body?.password) {
       return fail(400, '用户名和密码不能为空')
     }
-    if (body.username !== 'hr' || body.password !== 'hr123456') {
-      return fail(400, '用户名或密码错误')
+    if (body.username === 'hr' && body.password === 'hr123456') {
+      return ok({ token: DEMO_TOKEN, user: DEMO_USER })
     }
-    return ok({ token: DEMO_TOKEN, user: DEMO_USER })
+    if (body.username === 'viewer' && body.password === 'viewer123') {
+      return ok({ token: 'mock-viewer-token', user: VIEWER_USER })
+    }
+    return fail(400, '用户名或密码错误')
   }),
 
   http.get(`${API}/auth/me`, ({ request }) => {
     const denied = requireAuth(request)
-    return denied ?? ok(DEMO_USER)
+    return denied ?? ok(currentUserOf(request))
   }),
 
   /* ------------------------------ 组织 ------------------------------ */
@@ -587,7 +605,7 @@ export const handlers = [
   http.get(`${API}/import/template`, ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('payroll:import:submit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
     const search = new URL(request.url).searchParams
     const periodId = search.get('periodId')
     const bizType = search.get('bizType')
@@ -602,7 +620,7 @@ export const handlers = [
   http.post(`${API}/import/validate`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('payroll:import:submit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
     const form = await request.formData()
     const file = form.get('file')
     const periodId = form.get('periodId')
@@ -625,17 +643,23 @@ export const handlers = [
       totalRows: 10,
       successRows: 10 - errors.length,
       failRows: errors.length,
-      status: 'VALIDATED',
+      // 文件名含 slow 时演示异步校验：先返回 VALIDATING，2.5s 后变 VALIDATED
+      status: /slow/i.test(file.name) ? 'VALIDATING' : 'VALIDATED',
       errors,
     }
-    importState.batches.set(batchId, { result, fileName: file.name, committed: false })
+    importState.batches.set(batchId, {
+      result,
+      fileName: file.name,
+      committed: false,
+      ...(/slow/i.test(file.name) ? { readyAt: Date.now() + 2500 } : {}),
+    })
     return ok(result)
   }),
 
   http.get(`${API}/import/:batchId/errors`, ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('payroll:export')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'payroll:export')) return fail(403, '无权限执行该操作')
     const entry = importState.batches.get(String(params.batchId))
     if (!entry) return fail(400, '批次不存在')
     const filename = `import-errors-${entry.result.batchId}.xlsx`
@@ -650,16 +674,22 @@ export const handlers = [
     if (denied) return denied
     const entry = importState.batches.get(String(params.batchId))
     if (!entry) return fail(400, '批次不存在或已过期')
+    // 异步校验完成
+    if (entry.readyAt !== undefined && Date.now() >= entry.readyAt) {
+      entry.result = { ...entry.result, status: 'VALIDATED' }
+      entry.readyAt = undefined
+    }
     return ok({ ...entry.result, status: entry.committed ? 'COMMITTED' : entry.result.status })
   }),
 
   http.post(`${API}/import/:batchId/commit`, ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('payroll:import:submit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
     const entry = importState.batches.get(String(params.batchId))
     if (!entry) return fail(400, '批次不存在')
     if (entry.committed) return fail(409, '该批次已提交，不能重复提交')
+    if (entry.result.status === 'VALIDATING') return fail(409, '预校验进行中，请稍候再提交')
     if (entry.result.failRows > 0) {
       return fail(409, `预校验存在 ${entry.result.failRows} 行失败，禁止提交`, {
         batchId: entry.result.batchId,
@@ -703,7 +733,7 @@ export const handlers = [
     const companyId = search.get('companyId')
     if (!year) return fail(400, 'year 不能为空')
     if (!groupBy) return fail(400, 'groupBy 不能为空')
-    if (groupBy === 'DEPT' && DEMO_USER.dataScope === 'ALL' && !companyId) {
+    if (groupBy === 'DEPT' && currentUserOf(request)?.dataScope === 'ALL' && !companyId) {
       return fail(400, '集团范围按部门汇总必须提供 companyId')
     }
     const rows = groupBy === 'EMP' ? ANNUAL_REPORT_EMP_ROWS : ANNUAL_REPORT_ROWS
@@ -713,7 +743,7 @@ export const handlers = [
   http.post(`${API}/reports/export`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('payroll:export')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'payroll:export')) return fail(403, '无权限执行该操作')
     const body = (await request.json()) as ExportRequest
     if (!body?.reportType || !body.params || !body.format) {
       return fail(400, '缺少 reportType / params / format')
@@ -721,7 +751,7 @@ export const handlers = [
     const params = body.params
     if (body.reportType === 'ANNUAL') {
       if (!params.year || !params.groupBy) return fail(400, '年度报表必须提供 params.year 与 params.groupBy')
-      if (params.groupBy === 'DEPT' && DEMO_USER.dataScope === 'ALL' && !params.companyId) {
+      if (params.groupBy === 'DEPT' && currentUserOf(request)?.dataScope === 'ALL' && !params.companyId) {
         return fail(400, '集团范围按部门导出必须提供 params.companyId')
       }
     } else if (!params.periodYm) {
@@ -775,7 +805,7 @@ export const handlers = [
   http.post(`${API}/users`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:user:edit')) return fail(403, '无权限执行该操作')
     const body = (await request.json()) as UserCreateRequest
     if (!body.companyId || !body.username || !body.password || !body.realName) {
       return fail(400, '主体、用户名、密码、姓名为必填')
@@ -806,11 +836,11 @@ export const handlers = [
   http.put(`${API}/users/:id`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:user:edit')) return fail(403, '无权限执行该操作')
     const user = state.users.find((item) => item.id === params.id)
     if (!user) return fail(400, '用户不存在')
     const body = (await request.json()) as UserUpdateRequest
-    if (body.status === 0 && user.id === DEMO_USER.userId) return fail(409, '不能停用自己')
+    if (body.status === 0 && user.id === currentUserOf(request)?.userId) return fail(409, '不能停用自己')
     if (body.employeeId && state.users.some((item) => item.id !== user.id && item.employeeId === body.employeeId)) {
       return fail(409, '该人员已关联其他账号')
     }
@@ -827,8 +857,8 @@ export const handlers = [
   http.delete(`${API}/users/:id`, ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
-    if (String(params.id) === DEMO_USER.userId) return fail(409, '不能删除自己')
+    if (!hasPermission(request, 'sys:user:edit')) return fail(403, '无权限执行该操作')
+    if (String(params.id) === currentUserOf(request)?.userId) return fail(409, '不能删除自己')
     const index = state.users.findIndex((item) => item.id === params.id)
     if (index < 0) return fail(400, '用户不存在')
     state.users.splice(index, 1)
@@ -838,7 +868,7 @@ export const handlers = [
   http.post(`${API}/users/:id/reset-password`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:user:edit')) return fail(403, '无权限执行该操作')
     const user = state.users.find((item) => item.id === params.id)
     if (!user) return fail(400, '用户不存在')
     const body = (await request.json()) as { newPassword?: string }
@@ -862,7 +892,7 @@ export const handlers = [
   http.post(`${API}/roles`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:role:edit')) return fail(403, '无权限执行该操作')
     const body = (await request.json()) as RoleCreateRequest
     if (!body.companyId || !body.roleCode || !body.roleName || !body.dataScope) {
       return fail(400, '主体、角色编码、名称、数据范围为必填')
@@ -870,7 +900,7 @@ export const handlers = [
     if (state.roles.some((role) => role.companyId === body.companyId && role.roleCode === body.roleCode)) {
       return fail(409, '角色编码已存在')
     }
-    if (body.dataScope === 'ALL' && !DEMO_USER.permissions.includes('sys:role:grant:all')) {
+    if (body.dataScope === 'ALL' && !hasPermission(request, 'sys:role:grant:all')) {
       return fail(403, '授予集团数据范围需要 sys:role:grant:all')
     }
     const role = {
@@ -890,11 +920,11 @@ export const handlers = [
   http.put(`${API}/roles/:id`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:role:edit')) return fail(403, '无权限执行该操作')
     const role = state.roles.find((item) => item.id === params.id)
     if (!role) return fail(400, '角色不存在')
     const body = (await request.json()) as RoleUpdateRequest
-    if (body.dataScope === 'ALL' && !DEMO_USER.permissions.includes('sys:role:grant:all')) {
+    if (body.dataScope === 'ALL' && !hasPermission(request, 'sys:role:grant:all')) {
       return fail(403, '授予集团数据范围需要 sys:role:grant:all')
     }
     Object.assign(role, {
@@ -910,7 +940,7 @@ export const handlers = [
   http.delete(`${API}/roles/:id`, ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:role:edit')) return fail(403, '无权限执行该操作')
     const occupied = state.users.some((user) => user.roleIds.includes(String(params.id)))
     if (occupied) return fail(409, '仍有用户关联该角色，请先改授其它角色')
     const index = state.roles.findIndex((item) => item.id === params.id)
@@ -922,12 +952,12 @@ export const handlers = [
   http.put(`${API}/roles/:id/grants`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:role:edit')) return fail(403, '无权限执行该操作')
     const role = state.roles.find((item) => item.id === params.id)
     if (!role) return fail(400, '角色不存在')
     const body = (await request.json()) as { permissions?: string[] }
     if (!Array.isArray(body.permissions)) return fail(400, 'permissions 必须是数组')
-    const outside = body.permissions.filter((code) => !DEMO_USER.permissions.includes(code))
+    const outside = body.permissions.filter((code) => !hasPermission(request, code))
     if (outside.length > 0) return fail(403, `不得授予操作者未持有的权限点：${outside.join(', ')}`)
     role.permissions = [...body.permissions] as Role['permissions']
     return ok(role)
@@ -936,7 +966,7 @@ export const handlers = [
   http.post(`${API}/depts`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:dept:edit')) return fail(403, '无权限执行该操作')
     const body = (await request.json()) as DeptCreateRequest
     if (!body.companyId || !body.deptCode || !body.deptName) return fail(400, '主体、部门编码、名称为必填')
     if (state.depts.some((dept) => dept.companyId === body.companyId && dept.deptCode === body.deptCode)) {
@@ -960,7 +990,7 @@ export const handlers = [
   http.put(`${API}/depts/:id`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:dept:edit')) return fail(403, '无权限执行该操作')
     const dept = state.depts.find((item) => item.id === params.id)
     if (!dept) return fail(400, '部门不存在')
     const body = (await request.json()) as DeptUpdateRequest
@@ -985,7 +1015,7 @@ export const handlers = [
   http.delete(`${API}/depts/:id`, ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:dept:edit')) return fail(403, '无权限执行该操作')
     const id = String(params.id)
     if (state.depts.some((dept) => dept.parentId === id)) return fail(409, '存在下级部门，请先迁移或删除下级')
     if (state.employees.some((employee) => employee.deptId === id)) return fail(409, '部门下存在关联员工')
@@ -999,7 +1029,7 @@ export const handlers = [
   http.post(`${API}/companies`, async ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:company:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:company:edit')) return fail(403, '无权限执行该操作')
     const body = (await request.json()) as CompanyCreateRequest
     if (!body.companyCode || !body.companyName) return fail(400, '主体编码与名称为必填')
     if (state.companies.some((company) => company.companyCode === body.companyCode)) {
@@ -1018,7 +1048,7 @@ export const handlers = [
   http.put(`${API}/companies/:id`, async ({ request, params }) => {
     const denied = requireAuth(request)
     if (denied) return denied
-    if (!DEMO_USER.permissions.includes('sys:company:edit')) return fail(403, '无权限执行该操作')
+    if (!hasPermission(request, 'sys:company:edit')) return fail(403, '无权限执行该操作')
     const company = state.companies.find((item) => item.id === params.id)
     if (!company) return fail(400, '主体不存在')
     const body = (await request.json()) as CompanyUpdateRequest

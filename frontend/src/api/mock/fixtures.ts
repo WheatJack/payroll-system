@@ -56,6 +56,23 @@ export const DEMO_USER: CurrentUser = {
   ],
 }
 
+/** 只读演示用户：只持 payroll:record:view，用于验证权限分支（导出隐藏 / 导入禁用）。 */
+export const VIEWER_USER: CurrentUser = {
+  userId: '9',
+  username: 'viewer',
+  realName: '只读用户',
+  companyId: '1',
+  employeeId: null,
+  dataScope: 'COMPANY',
+  permissions: ['payroll:record:view'],
+}
+
+/** token -> 当前用户（多用户 mock，便于验证权限分支）。 */
+export const DEMO_TOKENS: Record<string, CurrentUser> = {
+  [DEMO_TOKEN]: DEMO_USER,
+  'mock-viewer-token': VIEWER_USER,
+}
+
 export const COMPANIES: Company[] = [
   { id: '1', companyCode: 'BJ', companyName: '北京总部', status: 1 },
   { id: '2', companyCode: 'SH', companyName: '上海分公司', status: 1 },

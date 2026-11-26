@@ -16,7 +16,7 @@ import { ElMessage } from 'element-plus'
 import exampleRaw from '@/api/mock/fixtures/grid-response.json?raw'
 import type { GridColumn, GridResponse } from '@/api/models'
 import MoneyInput from '@/components/MoneyInput.vue'
-import { add, coerce, format, round, sub } from '@/utils/money'
+import { add, coerce, format, formatOrZero, round, sub } from '@/utils/money'
 import { parseClipboardMatrix } from '@/utils/paste'
 
 interface Envelope {
@@ -431,7 +431,7 @@ onBeforeUnmount(() => {
           :edit-render="column.editable ? {} : undefined"
         >
           <template #default="{ row }">
-            <span class="cell-amount">{{ format(cellValue(row, column.itemCode)) }}</span>
+            <span class="cell-amount">{{ formatOrZero(cellValue(row, column.itemCode)) }}</span>
           </template>
           <template v-if="column.editable" #edit="{ row }">
             <MoneyInput

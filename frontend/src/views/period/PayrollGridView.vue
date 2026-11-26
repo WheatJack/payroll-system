@@ -22,7 +22,7 @@ import MoneyInput from '@/components/MoneyInput.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
-import { add, coerce, format, sub } from '@/utils/money'
+import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
 import { buildPayslipParams, buildPeriodSheetParams } from '@/utils/export'
 import { parseClipboardMatrix } from '@/utils/paste'
 
@@ -502,7 +502,7 @@ onBeforeUnmount(() => {
         >
           <template #default="{ row }">
             <span class="grid-amount" :class="{ 'is-dirty': store.isDirty(row.recordId, column.itemCode) }">
-              {{ format(cellValue(row, column.itemCode)) }}
+              {{ formatOrZero(cellValue(row, column.itemCode)) }}
             </span>
           </template>
           <template v-if="editable && column.editable" #edit="{ row }">

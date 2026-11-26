@@ -64,7 +64,9 @@ async function submit() {
         <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" show-icon class="login-error" />
 
         <div v-if="isMock" class="mock-hint">
-          Mock 模式：演示账号 <code>hr</code> / <code>hr123456</code>
+          Mock 模式：
+          <div>管理员 <code>hr</code> / <code>hr123456</code>（全部权限）</div>
+          <div>只读用户 <code>viewer</code> / <code>viewer123</code>（仅 payroll:record:view）</div>
         </div>
 
         <el-button type="primary" size="large" class="login-submit" :loading="submitting" @click="submit">

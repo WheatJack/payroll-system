@@ -120,6 +120,19 @@ export function format(value: string): string {
 export const ZERO: Money = '0.00'
 
 /**
+ * 展示兜底：空值/非法金额一律显示 0.00。
+ * 单元格渲染用它，避免一个坏字段让整张表抛错白屏（与合计行容错保持一致）。
+ */
+export function formatOrZero(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.trim() === '') return ZERO
+  try {
+    return format(value)
+  } catch {
+    return ZERO
+  }
+}
+
+/**
  * 清洗用户输入或 Excel 粘贴的金额文本（剔除货币符号、千分位、空白），
  * 合法则返回金额字符串，非法返回 null。仅做字符串清洗，不做数值转换。
  */
