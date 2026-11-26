@@ -2,7 +2,11 @@ import { HttpResponse, http, delay } from 'msw'
 import type {
   ChangesetRequest,
   ChangesetResult,
+  CompanyCreateRequest,
+  CompanyUpdateRequest,
   CompProfile,
+  DeptCreateRequest,
+  DeptUpdateRequest,
   Employee,
   EmployeePage,
   ExportRequest,
@@ -13,7 +17,13 @@ import type {
   PayItem,
   Period,
   PeriodCreateRequest,
+  Role,
+  RoleCreateRequest,
+  RoleUpdateRequest,
   RunProgress,
+  User,
+  UserCreateRequest,
+  UserUpdateRequest,
 } from '@/api/models'
 import { add, round, sub } from '@/utils/money'
 import {
@@ -30,6 +40,9 @@ import {
   MONTHLY_REPORT_ROWS,
   PAY_ITEMS,
   PERIODS,
+  PERMISSIONS,
+  ROLES,
+  USERS,
   clone,
 } from './fixtures'
 
@@ -61,10 +74,18 @@ const state = {
   periods: clone(PERIODS),
   items: clone(PAY_ITEMS),
   grid: clone(GRID_EXAMPLE),
+  companies: clone(COMPANIES),
+  depts: clone(DEPTS),
+  users: clone(USERS),
+  roles: clone(ROLES),
   runs: new Map<string, { startedAt: number }>(),
   nextEmployeeId: EMPLOYEES.length + 1,
   nextProfileId: COMP_PROFILES.length + 1,
   nextPeriodId: 4,
+  nextUserId: USERS.length + 1,
+  nextRoleId: ROLES.length + 1,
+  nextDeptId: 20,
+  nextCompanyId: 3,
 }
 
 /** 导入批次（M1.5）：预校验持久化，提交后标记已提交，同名文件拒绝重复导入。 */
@@ -147,14 +168,14 @@ export const handlers = [
 
   /* ------------------------------ 组织 ------------------------------ */
 
-  http.get(`${API}/companies`, ({ request }) => requireAuth(request) ?? ok(COMPANIES)),
+  http.get(`${API}/companies`, ({ request }) => requireAuth(request) ?? ok(state.companies)),
 
   http.get(`${API}/depts`, ({ request }) => {
     const denied = requireAuth(request)
     if (denied) return denied
     const companyId = new URL(request.url).searchParams.get('companyId')
     if (!companyId) return fail(400, 'companyId 不能为空')
-    return ok(DEPTS.filter((dept) => dept.companyId === companyId))
+    return ok(state.depts.filter((dept) => dept.companyId === companyId))
   }),
 
   /* ------------------------------ 人员 ------------------------------ */
@@ -715,4 +736,329 @@ export const handlers = [
       headers: { 'Content-Type': XLSX_MIME, 'Content-Disposition': `attachment; filename="${filename}"` },
     })
   }),
+
+  /* ------------------------------ 系统管理 ------------------------------ */
+
+  http.get(`${API}/permissions`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    return ok(PERMISSIONS)
+  }),
+
+  http.get(`${API}/users`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const search = new URL(request.url).searchParams
+    const current = Math.max(1, Number(search.get('current') ?? '1'))
+    const size = Math.max(1, Number(search.get('size') ?? '20'))
+    const keyword = (search.get('keyword') ?? '').trim().toLowerCase()
+    const companyId = search.get('companyId')
+    const deptId = search.get('deptId')
+    const status = search.get('status')
+
+    const list = state.users
+      .map(presentUser)
+      .filter((user) => {
+        if (keyword && !`${user.username}${user.realName}`.toLowerCase().includes(keyword)) return false
+        if (companyId && user.companyId !== companyId) return false
+        if (deptId && user.deptId !== deptId) return false
+        if (status && String(user.status) !== status) return false
+        return true
+      })
+      .sort((a, b) => a.username.localeCompare(b.username))
+
+    const total = list.length
+    const start = (current - 1) * size
+    return ok({ records: list.slice(start, start + size), total, current, size })
+  }),
+
+  http.post(`${API}/users`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as UserCreateRequest
+    if (!body.companyId || !body.username || !body.password || !body.realName) {
+      return fail(400, '主体、用户名、密码、姓名为必填')
+    }
+    if (body.password.length < 8) return fail(400, '密码至少 8 位')
+    if (state.users.some((user) => user.username === body.username)) return fail(409, '用户名已存在')
+    if (body.employeeId && state.users.some((user) => user.employeeId === body.employeeId)) {
+      return fail(409, '该人员已关联其他账号')
+    }
+    const user: User = {
+      id: String(state.nextUserId++),
+      companyId: body.companyId,
+      username: body.username,
+      realName: body.realName,
+      employeeId: body.employeeId ?? null,
+      deptId: body.deptId ?? null,
+      mobileMask: null,
+      status: body.status ?? 1,
+      lastLoginAt: null,
+      roleIds: body.roleIds ?? [],
+      permissions: [],
+      dataScope: 'SELF',
+    }
+    state.users.push(user)
+    return ok(presentUser(user))
+  }),
+
+  http.put(`${API}/users/:id`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    const user = state.users.find((item) => item.id === params.id)
+    if (!user) return fail(400, '用户不存在')
+    const body = (await request.json()) as UserUpdateRequest
+    if (body.status === 0 && user.id === DEMO_USER.userId) return fail(409, '不能停用自己')
+    if (body.employeeId && state.users.some((item) => item.id !== user.id && item.employeeId === body.employeeId)) {
+      return fail(409, '该人员已关联其他账号')
+    }
+    Object.assign(user, {
+      ...(body.realName !== undefined ? { realName: body.realName } : {}),
+      ...(body.employeeId !== undefined ? { employeeId: body.employeeId } : {}),
+      ...(body.deptId !== undefined ? { deptId: body.deptId } : {}),
+      ...(body.status !== undefined ? { status: body.status } : {}),
+      ...(body.roleIds !== undefined ? { roleIds: body.roleIds } : {}),
+    })
+    return ok(presentUser(user))
+  }),
+
+  http.delete(`${API}/users/:id`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    if (String(params.id) === DEMO_USER.userId) return fail(409, '不能删除自己')
+    const index = state.users.findIndex((item) => item.id === params.id)
+    if (index < 0) return fail(400, '用户不存在')
+    state.users.splice(index, 1)
+    return ok(null)
+  }),
+
+  http.post(`${API}/users/:id/reset-password`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:user:edit')) return fail(403, '无权限执行该操作')
+    const user = state.users.find((item) => item.id === params.id)
+    if (!user) return fail(400, '用户不存在')
+    const body = (await request.json()) as { newPassword?: string }
+    if (!body.newPassword || body.newPassword.length < 8) return fail(400, '新密码至少 8 位')
+    return ok(presentUser(user))
+  }),
+
+  http.get(`${API}/roles`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const search = new URL(request.url).searchParams
+    const companyId = search.get('companyId')
+    const status = search.get('status')
+    return ok(
+      state.roles
+        .filter((role) => (companyId ? role.companyId === companyId : true))
+        .filter((role) => (status !== null ? String(role.status) === status : true)),
+    )
+  }),
+
+  http.post(`${API}/roles`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as RoleCreateRequest
+    if (!body.companyId || !body.roleCode || !body.roleName || !body.dataScope) {
+      return fail(400, '主体、角色编码、名称、数据范围为必填')
+    }
+    if (state.roles.some((role) => role.companyId === body.companyId && role.roleCode === body.roleCode)) {
+      return fail(409, '角色编码已存在')
+    }
+    if (body.dataScope === 'ALL' && !DEMO_USER.permissions.includes('sys:role:grant:all')) {
+      return fail(403, '授予集团数据范围需要 sys:role:grant:all')
+    }
+    const role = {
+      id: String(state.nextRoleId++),
+      companyId: body.companyId,
+      roleCode: body.roleCode,
+      roleName: body.roleName,
+      dataScope: body.dataScope,
+      remark: body.remark ?? null,
+      status: body.status ?? 1,
+      permissions: body.permissions ?? [],
+    }
+    state.roles.push(role)
+    return ok(role)
+  }),
+
+  http.put(`${API}/roles/:id`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    const role = state.roles.find((item) => item.id === params.id)
+    if (!role) return fail(400, '角色不存在')
+    const body = (await request.json()) as RoleUpdateRequest
+    if (body.dataScope === 'ALL' && !DEMO_USER.permissions.includes('sys:role:grant:all')) {
+      return fail(403, '授予集团数据范围需要 sys:role:grant:all')
+    }
+    Object.assign(role, {
+      ...(body.roleCode !== undefined ? { roleCode: body.roleCode } : {}),
+      ...(body.roleName !== undefined ? { roleName: body.roleName } : {}),
+      ...(body.dataScope !== undefined ? { dataScope: body.dataScope } : {}),
+      ...(body.remark !== undefined ? { remark: body.remark } : {}),
+      ...(body.status !== undefined ? { status: body.status } : {}),
+    })
+    return ok(role)
+  }),
+
+  http.delete(`${API}/roles/:id`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    const occupied = state.users.some((user) => user.roleIds.includes(String(params.id)))
+    if (occupied) return fail(409, '仍有用户关联该角色，请先改授其它角色')
+    const index = state.roles.findIndex((item) => item.id === params.id)
+    if (index < 0) return fail(400, '角色不存在')
+    state.roles.splice(index, 1)
+    return ok(null)
+  }),
+
+  http.put(`${API}/roles/:id/grants`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:role:edit')) return fail(403, '无权限执行该操作')
+    const role = state.roles.find((item) => item.id === params.id)
+    if (!role) return fail(400, '角色不存在')
+    const body = (await request.json()) as { permissions?: string[] }
+    if (!Array.isArray(body.permissions)) return fail(400, 'permissions 必须是数组')
+    const outside = body.permissions.filter((code) => !DEMO_USER.permissions.includes(code))
+    if (outside.length > 0) return fail(403, `不得授予操作者未持有的权限点：${outside.join(', ')}`)
+    role.permissions = [...body.permissions] as Role['permissions']
+    return ok(role)
+  }),
+
+  http.post(`${API}/depts`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as DeptCreateRequest
+    if (!body.companyId || !body.deptCode || !body.deptName) return fail(400, '主体、部门编码、名称为必填')
+    if (state.depts.some((dept) => dept.companyId === body.companyId && dept.deptCode === body.deptCode)) {
+      return fail(409, '部门编码已存在')
+    }
+    const parentId = body.parentId ?? '0'
+    const dept = {
+      id: String(state.nextDeptId++),
+      companyId: body.companyId,
+      parentId,
+      deptCode: body.deptCode,
+      deptName: body.deptName,
+      ancestors: ancestorsFor(parentId),
+      sortNo: body.sortNo ?? 0,
+      status: body.status ?? 1,
+    }
+    state.depts.push(dept)
+    return ok(dept)
+  }),
+
+  http.put(`${API}/depts/:id`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    const dept = state.depts.find((item) => item.id === params.id)
+    if (!dept) return fail(400, '部门不存在')
+    const body = (await request.json()) as DeptUpdateRequest
+    if (body.parentId !== undefined) {
+      if (body.parentId === dept.id) return fail(400, '上级部门不能是自己')
+      const parent = state.depts.find((item) => item.id === body.parentId)
+      if (parent && parent.ancestors.split(',').includes(dept.id)) {
+        return fail(400, '上级部门不能是自己的下级')
+      }
+      dept.parentId = body.parentId
+      dept.ancestors = ancestorsFor(body.parentId)
+    }
+    Object.assign(dept, {
+      ...(body.deptCode !== undefined ? { deptCode: body.deptCode } : {}),
+      ...(body.deptName !== undefined ? { deptName: body.deptName } : {}),
+      ...(body.sortNo !== undefined ? { sortNo: body.sortNo } : {}),
+      ...(body.status !== undefined ? { status: body.status } : {}),
+    })
+    return ok(dept)
+  }),
+
+  http.delete(`${API}/depts/:id`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:dept:edit')) return fail(403, '无权限执行该操作')
+    const id = String(params.id)
+    if (state.depts.some((dept) => dept.parentId === id)) return fail(409, '存在下级部门，请先迁移或删除下级')
+    if (state.employees.some((employee) => employee.deptId === id)) return fail(409, '部门下存在关联员工')
+    if (state.users.some((user) => user.deptId === id)) return fail(409, '部门下存在关联用户')
+    const index = state.depts.findIndex((dept) => dept.id === id)
+    if (index < 0) return fail(400, '部门不存在')
+    state.depts.splice(index, 1)
+    return ok(null)
+  }),
+
+  http.post(`${API}/companies`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:company:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as CompanyCreateRequest
+    if (!body.companyCode || !body.companyName) return fail(400, '主体编码与名称为必填')
+    if (state.companies.some((company) => company.companyCode === body.companyCode)) {
+      return fail(409, '主体编码已存在')
+    }
+    const company = {
+      id: String(state.nextCompanyId++),
+      companyCode: body.companyCode,
+      companyName: body.companyName,
+      status: body.status ?? 1,
+    }
+    state.companies.push(company)
+    return ok(company)
+  }),
+
+  http.put(`${API}/companies/:id`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('sys:company:edit')) return fail(403, '无权限执行该操作')
+    const company = state.companies.find((item) => item.id === params.id)
+    if (!company) return fail(400, '主体不存在')
+    const body = (await request.json()) as CompanyUpdateRequest
+    if (
+      body.companyCode &&
+      state.companies.some((item) => item.id !== company.id && item.companyCode === body.companyCode)
+    ) {
+      return fail(409, '主体编码已存在')
+    }
+    Object.assign(company, {
+      ...(body.companyCode !== undefined ? { companyCode: body.companyCode } : {}),
+      ...(body.companyName !== undefined ? { companyName: body.companyName } : {}),
+      ...(body.status !== undefined ? { status: body.status } : {}),
+    })
+    return ok(company)
+  }),
 ]
+
+const SCOPE_RANK: Record<string, number> = { SELF: 1, DEPT: 2, DEPT_SUB: 3, COMPANY: 4, ALL: 5 }
+
+/** 用户权限点/数据范围由所授角色合并得出（与后端一致）。 */
+function presentUser(user: User): User {
+  const permissions = new Set<string>()
+  const scopes: string[] = []
+  for (const role of state.roles) {
+    if (!user.roleIds.includes(role.id)) continue
+    role.permissions.forEach((permission) => permissions.add(permission))
+    scopes.push(role.dataScope)
+  }
+  scopes.sort((a, b) => (SCOPE_RANK[b] ?? 0) - (SCOPE_RANK[a] ?? 0))
+  return {
+    ...user,
+    permissions: [...permissions] as User['permissions'],
+    dataScope: (scopes[0] ?? 'SELF') as User['dataScope'],
+  }
+}
+
+/** 由上级部门推导 ancestors（根为 parentId=0）。 */
+function ancestorsFor(parentId: string): string {
+  if (!parentId || parentId === '0') return ',0,'
+  const parent = state.depts.find((dept) => dept.id === parentId)
+  return parent ? `${parent.ancestors}${parent.id},` : ',0,'
+}

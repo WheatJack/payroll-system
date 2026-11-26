@@ -60,6 +60,30 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/report/AnnualReportView.vue'),
         meta: { title: '年度报表', perm: 'payroll:record:view' },
       },
+      {
+        path: 'system/users',
+        name: 'system-users',
+        component: () => import('@/views/system/UserListView.vue'),
+        meta: { title: '用户管理', perm: 'sys:user:view' },
+      },
+      {
+        path: 'system/roles',
+        name: 'system-roles',
+        component: () => import('@/views/system/RoleListView.vue'),
+        meta: { title: '角色与授权', perm: 'sys:role:view' },
+      },
+      {
+        path: 'system/depts',
+        name: 'system-depts',
+        component: () => import('@/views/system/DeptTreeView.vue'),
+        meta: { title: '部门管理', perm: 'sys:dept:edit' },
+      },
+      {
+        path: 'system/companies',
+        name: 'system-companies',
+        component: () => import('@/views/system/CompanyListView.vue'),
+        meta: { title: '法人主体', perm: 'sys:company:edit' },
+      },
       // 开发专用：vxe-table PoC 只在 dev 注册，生产环境不存在该路由
       ...(import.meta.env.DEV
         ? [

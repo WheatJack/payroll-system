@@ -5,7 +5,19 @@
  * 其余端点按 `docs/api/openapi.yaml` 的 schema 构造最小可用数据。
  */
 import gridExampleRaw from './fixtures/grid-response.json?raw'
-import type { Company, CompProfile, CurrentUser, Dept, Employee, GridResponse, PayItem, Period } from '@/api/models'
+import type {
+  Company,
+  CompProfile,
+  CurrentUser,
+  Dept,
+  Employee,
+  GridResponse,
+  PayItem,
+  Period,
+  PermissionItem,
+  Role,
+  User,
+} from '@/api/models'
 
 interface Envelope<T> {
   code: number
@@ -24,7 +36,8 @@ export const DEMO_USER: CurrentUser = {
   realName: '李人事',
   companyId: '1',
   employeeId: null,
-  dataScope: 'COMPANY',
+  // 与角色 ADMIN(ALL) 保持一致：mock 用户的数据范围由所授角色合并得出
+  dataScope: 'ALL',
   permissions: [
     'payroll:record:view',
     'payroll:record:edit',
@@ -33,6 +46,13 @@ export const DEMO_USER: CurrentUser = {
     'payroll:import:submit',
     'payroll:export',
     'payroll:sensitive:view',
+    'sys:user:view',
+    'sys:user:edit',
+    'sys:role:view',
+    'sys:role:edit',
+    'sys:role:grant:all',
+    'sys:dept:edit',
+    'sys:company:edit',
   ],
 }
 
@@ -215,4 +235,101 @@ export const ANNUAL_REPORT_ROWS = [
 export const ANNUAL_REPORT_EMP_ROWS = [
   { year: '2026', groupBy: 'EMP', employeeId: '1', empNo: 'E001', empName: '张三', employeeCount: 1, grossAmount: '8600.00', deductionAmount: '2150.00', netAmount: '6450.00' },
   { year: '2026', groupBy: 'EMP', employeeId: '2', empNo: 'E002', empName: '李四', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+]
+
+/* ------------------------- 系统管理（M1.5） ------------------------- */
+
+export const PERMISSIONS: PermissionItem[] = [
+  { code: 'payroll:record:view', name: '查看核算', module: 'PAYROLL' },
+  { code: 'payroll:record:edit', name: '编制/编辑', module: 'PAYROLL' },
+  { code: 'payroll:period:lock', name: '锁定期间', module: 'PAYROLL' },
+  { code: 'payroll:period:unlock', name: '解锁期间（高危）', module: 'PAYROLL' },
+  { code: 'payroll:import:submit', name: '导入提交', module: 'PAYROLL' },
+  { code: 'payroll:export', name: '导出（高危）', module: 'PAYROLL' },
+  { code: 'payroll:sensitive:view', name: '查看完整证件号/手机号', module: 'PAYROLL' },
+  { code: 'sys:user:view', name: '查看用户', module: 'SYS' },
+  { code: 'sys:user:edit', name: '维护用户', module: 'SYS' },
+  { code: 'sys:role:view', name: '查看角色', module: 'SYS' },
+  { code: 'sys:role:edit', name: '维护角色', module: 'SYS' },
+  { code: 'sys:role:grant:all', name: '授予集团数据范围', module: 'SYS' },
+  { code: 'sys:dept:edit', name: '维护部门', module: 'SYS' },
+  { code: 'sys:company:edit', name: '维护法人主体', module: 'SYS' },
+]
+
+export const ROLES: Role[] = [
+  {
+    id: '1',
+    companyId: '1',
+    roleCode: 'ADMIN',
+    roleName: '系统管理员',
+    dataScope: 'ALL',
+    remark: '集团管理员',
+    status: 1,
+    permissions: [...DEMO_USER.permissions] as Role['permissions'],
+  },
+  {
+    id: '2',
+    companyId: '1',
+    roleCode: 'HR',
+    roleName: '人事专员',
+    dataScope: 'COMPANY',
+    remark: null,
+    status: 1,
+    permissions: ['payroll:record:view', 'payroll:record:edit', 'payroll:period:lock', 'payroll:import:submit'] as Role['permissions'],
+  },
+  {
+    id: '3',
+    companyId: '1',
+    roleCode: 'AUDITOR',
+    roleName: '审计只读',
+    dataScope: 'COMPANY',
+    remark: null,
+    status: 1,
+    permissions: ['payroll:record:view', 'payroll:export'] as Role['permissions'],
+  },
+]
+
+export const USERS: User[] = [
+  {
+    id: '1',
+    companyId: '1',
+    username: 'hr',
+    realName: '李人事',
+    employeeId: null,
+    deptId: '1',
+    mobileMask: '138****8000',
+    status: 1,
+    lastLoginAt: '2026-11-26T09:00:00Z',
+    roleIds: ['1'],
+    permissions: [...DEMO_USER.permissions] as User['permissions'],
+    dataScope: 'COMPANY',
+  },
+  {
+    id: '2',
+    companyId: '1',
+    username: 'zhangfy',
+    realName: '张芳',
+    employeeId: null,
+    deptId: '2',
+    mobileMask: '139****9000',
+    status: 1,
+    lastLoginAt: null,
+    roleIds: ['2'],
+    permissions: ['payroll:record:view', 'payroll:record:edit', 'payroll:period:lock', 'payroll:import:submit'] as Role['permissions'],
+    dataScope: 'COMPANY',
+  },
+  {
+    id: '3',
+    companyId: '1',
+    username: 'audit',
+    realName: '王审计',
+    employeeId: null,
+    deptId: null,
+    mobileMask: null,
+    status: 0,
+    lastLoginAt: null,
+    roleIds: ['3'],
+    permissions: ['payroll:record:view', 'payroll:export'] as Role['permissions'],
+    dataScope: 'COMPANY',
+  },
 ]

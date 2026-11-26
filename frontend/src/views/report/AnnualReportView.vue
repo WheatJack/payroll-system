@@ -184,7 +184,7 @@ onMounted(() => {
     </div>
 
     <el-alert
-      v-if="companyRequired"
+      v-if="companyRequired && !filters.companyId"
       title="当前账号是集团数据范围：按部门汇总必须先选择法人主体，否则不同主体的同名部门会被合并加总"
       type="info"
       show-icon

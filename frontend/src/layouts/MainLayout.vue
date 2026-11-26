@@ -8,15 +8,35 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-const menus = computed(() =>
-  [
-    { path: '/employees', title: '人员管理', perm: 'payroll:record:view', icon: 'User' },
-    { path: '/items', title: '工资项', perm: 'payroll:record:view', icon: 'List' },
-    { path: '/periods', title: '工资期间', perm: 'payroll:record:view', icon: 'Calendar' },
-    { path: '/reports/monthly', title: '月度报表', perm: 'payroll:record:view', icon: 'DataLine' },
-    { path: '/reports/annual', title: '年度报表', perm: 'payroll:record:view', icon: 'TrendCharts' },
-  ].filter((menu) => auth.has(menu.perm)),
-)
+interface MenuEntry {
+  path: string
+  title: string
+  perm?: string
+  children?: MenuEntry[]
+}
+
+const menus = computed<MenuEntry[]>(() => {
+  const entries: MenuEntry[] = [
+    { path: '/employees', title: '人员管理', perm: 'payroll:record:view' },
+    { path: '/items', title: '工资项', perm: 'payroll:record:view' },
+    { path: '/periods', title: '工资期间', perm: 'payroll:record:view' },
+    { path: '/reports/monthly', title: '月度报表', perm: 'payroll:record:view' },
+    { path: '/reports/annual', title: '年度报表', perm: 'payroll:record:view' },
+  ].filter((menu) => auth.has(menu.perm!))
+
+  // 系统管理：无任何 sys:* 权限时整组不渲染（仅显隐，真正边界在后端）
+  const systemChildren = [
+    { path: '/system/users', title: '用户管理', perm: 'sys:user:view' },
+    { path: '/system/roles', title: '角色与授权', perm: 'sys:role:view' },
+    { path: '/system/depts', title: '部门管理', perm: 'sys:dept:edit' },
+    { path: '/system/companies', title: '法人主体', perm: 'sys:company:edit' },
+  ].filter((menu) => auth.has(menu.perm))
+
+  if (systemChildren.length > 0) {
+    entries.push({ path: 'system', title: '系统管理', children: systemChildren })
+  }
+  return entries
+})
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/periods')) return '/periods'
@@ -42,9 +62,19 @@ async function logout() {
     <el-aside width="208px" class="app-aside">
       <div class="app-logo">工资核算系统</div>
       <el-menu :default-active="activeMenu" router :collapse="false" background-color="#1f2d3d" text-color="#c8d0dc" active-text-color="#ffffff">
-        <el-menu-item v-for="menu in menus" :key="menu.path" :index="menu.path">
-          <span>{{ menu.title }}</span>
-        </el-menu-item>
+        <template v-for="menu in menus" :key="menu.path">
+          <el-sub-menu v-if="menu.children" :index="menu.path">
+            <template #title>
+              <span>{{ menu.title }}</span>
+            </template>
+            <el-menu-item v-for="child in menu.children" :key="child.path" :index="child.path">
+              <span>{{ child.title }}</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="menu.path">
+            <span>{{ menu.title }}</span>
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-aside>
 
