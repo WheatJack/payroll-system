@@ -1,0 +1,24 @@
+{
+  "code": 0,
+  "msg": "ok",
+  "data": [
+    {
+      "companyId": "1",
+      "periodYm": "2026-11",
+      "deptId": "1",
+      "employeeCount": 42,
+      "grossAmount": "361200.00",
+      "deductionAmount": "48200.00",
+      "netAmount": "313000.00"
+    },
+    {
+      "companyId": "1",
+      "periodYm": "2026-11",
+      "deptId": "2",
+      "employeeCount": 18,
+      "grossAmount": "154800.00",
+      "deductionAmount": "20300.00",
+      "netAmount": "134500.00"
+    }
+  ]
+}

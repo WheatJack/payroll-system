@@ -41,10 +41,16 @@ info:
     7. **年月格式**：`periodYm` 匹配 `^[0-9]{4}-(0[1-9]|1[0-2])$`（如 `"2026-11"`）。
     8. **认证**：除 `POST /api/v1/auth/login` 外，所有端点都要求
        `Authorization: Bearer <token>`。
-    9. **里程碑**：每个操作带 `x-milestone`。`M1` 为本期实现范围；
-       `M2`（导入、报表）只冻结契约，**M1 不实现**，前后端不要为其编写调用逻辑。
-    10. **文件下载例外**：导入模板与错误报告是二进制附件（`Content-Disposition`），
-        不使用统一响应包；其余端点一律使用统一响应包。
+    9. **里程碑**：每个操作带 `x-milestone`。
+       - `M1` 已交付（人员、薪酬档案、工资项、期间、生成、编制台、重复检测）；
+       - `M1.5` 为第二阶段（汇总查询与导出、变动数据导入、系统管理）；
+       - `M2` 为更远期能力，本期不实现。
+    10. **文件下载例外**：导入模板、错误报告与报表导出是二进制附件
+        （`Content-Disposition`），成功时不使用统一响应包；**失败时仍返回
+        JSON 统一响应包**，`code` 与 HTTP 状态码一致。其余端点一律使用统一响应包。
+    11. **权限点**：功能权限点清单见 `PermissionCode`。
+        系统管理新增 `sys:user:view` / `sys:user:edit` / `sys:role:view` /
+        `sys:role:edit` / `sys:dept:edit` / `sys:company:edit`。
   contact:
     name: 工资核算系统
 tags:
@@ -64,10 +70,15 @@ tags:
     description: 异步生成与批次进度
   - name: 编制台
     description: 全量工资表与 changeset 批量保存
-  - name: 导入（M2）
-    description: 二期能力，M1 不实现
-  - name: 报表（M2）
-    description: 二期能力，M1 不实现
+  - name: 导入
+    description: M1.5 能力：变动数据导入（模板、预校验、提交、错误报告）
+  - name: 报表
+    description: M1.5 能力：月度/年度汇总查询与导出
+  - name: 系统管理
+    description: |
+      M1.5 能力：用户、角色、部门、法人主体管理。
+      权限点：`sys:user:view` / `sys:user:edit` / `sys:role:view` /
+      `sys:role:edit` / `sys:dept:edit` / `sys:company:edit`。
 security:
   - bearerAuth: []
 servers:
@@ -143,6 +154,35 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
+    post:
+      tags: [系统管理]
+      summary: 新增法人主体
+      description: 需要 `sys:company:edit`。`companyCode` 全局唯一，重复返回 409。
+      operationId: createCompany
+      x-milestone: M1.5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回主体
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompany'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /api/v1/depts:
     get:
@@ -171,6 +211,37 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [系统管理]
+      summary: 新增部门
+      description: |
+        需要 `sys:dept:edit`。`deptCode` 在同一主体内唯一，重复返回 409。
+        `ancestors` 由后端根据 `parentId` 生成，不接受客户端提交。
+      operationId: createDept
+      x-milestone: M1.5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeptCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回部门
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultDept'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -728,11 +799,11 @@ paths:
 
   /api/v1/import/template:
     get:
-      tags: [导入（M2）]
-      summary: 下载导入模板（M2）
+      tags: [导入]
+      summary: 下载导入模板
       description: 列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
       operationId: downloadImportTemplate
-      x-milestone: M2
+      x-milestone: M1.5
       parameters:
         - name: periodId
           in: query
@@ -768,11 +839,11 @@ paths:
 
   /api/v1/import/validate:
     post:
-      tags: [导入（M2）]
-      summary: 上传并预校验（M2）
+      tags: [导入]
+      summary: 上传并预校验
       description: 只预校验不落库；返回批次号、成功/失败行数与错误明细。
       operationId: validateImport
-      x-milestone: M2
+      x-milestone: M1.5
       requestBody:
         required: true
         content:
@@ -811,11 +882,11 @@ paths:
 
   /api/v1/import/{batchId}/commit:
     post:
-      tags: [导入（M2）]
-      summary: 确认提交导入（M2）
+      tags: [导入]
+      summary: 确认提交导入
       description: 事务内 upsert 并生成核算明细。已提交过的文件 hash 会被拒绝（409）。
       operationId: commitImport
-      x-milestone: M2
+      x-milestone: M1.5
       parameters:
         - $ref: '#/components/parameters/BatchIdPath'
       responses:
@@ -838,11 +909,11 @@ paths:
 
   /api/v1/import/{batchId}/errors:
     get:
-      tags: [导入（M2）]
-      summary: 下载错误报告（M2）
+      tags: [导入]
+      summary: 下载错误报告
       description: 返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
       operationId: downloadImportErrors
-      x-milestone: M2
+      x-milestone: M1.5
       parameters:
         - $ref: '#/components/parameters/BatchIdPath'
       responses:
@@ -869,11 +940,11 @@ paths:
 
   /api/v1/reports/monthly:
     get:
-      tags: [报表（M2）]
-      summary: 月度汇总（M2）
+      tags: [报表]
+      summary: 月度汇总
       description: 按部门汇总的月度数据；仅统计已锁定及以后期间。
       operationId: getMonthlyReport
-      x-milestone: M2
+      x-milestone: M1.5
       parameters:
         - name: periodYm
           in: query
@@ -909,11 +980,11 @@ paths:
 
   /api/v1/reports/annual:
     get:
-      tags: [报表（M2）]
-      summary: 年度汇总（M2）
+      tags: [报表]
+      summary: 年度汇总
       description: 按人或按部门汇总的年度数据；仅统计 `LOCKED` 及以后期间。
       operationId: getAnnualReport
-      x-milestone: M2
+      x-milestone: M1.5
       parameters:
         - name: year
           in: query
@@ -949,6 +1020,418 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/reports/export:
+    post:
+      tags: [报表]
+      summary: 导出汇总报表
+      description: |
+        将月度或年度汇总导出为 xlsx 文件。需要 `payroll:export` 权限；
+        导出成功写审计日志（`pay_audit_log`，`action=EXPORT`，记录查询条件与导出行数）。
+        数据范围过滤与查询接口一致（`SELF` / `DEPT` / `DEPT_SUB` / `COMPANY` / `ALL`）。
+        金额列以文本格式写入，避免 Excel 转为科学计数法。
+
+        **响应格式**：成功时 `200` 直接返回二进制 xlsx 流，**不使用统一响应包**；
+        文件名由 `Content-Disposition: attachment` 给出（含报表类型、期间与时间戳）。
+        失败时（`400`/`401`/`403`/`500`）**仍返回 JSON 统一响应包** `{code,msg,data}`，
+        `code` 与 HTTP 状态码一致。
+      operationId: exportReport
+      x-milestone: M1.5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequest'
+      responses:
+        '200':
+          description: xlsx 二进制流（不是统一响应包）
+          headers:
+            Content-Disposition:
+              description: '附件文件名，如 `attachment; filename="monthly-2026-11-20261126T101500.xlsx"`'
+              schema:
+                type: string
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: 参数校验失败；返回 JSON 统一响应包
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '401':
+          description: 未认证；返回 JSON 统一响应包
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '403':
+          description: 缺少 `payroll:export` 权限；返回 JSON 统一响应包
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '500':
+          description: 导出失败；返回 JSON 统一响应包
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+
+  # -----------------------------------------------------------------
+  # 系统管理（M1.5）
+  # -----------------------------------------------------------------
+  /api/v1/users:
+    get:
+      tags: [系统管理]
+      summary: 用户分页查询
+      description: 需要 `sys:user:view`。按用户名/姓名/主体/部门/状态筛选，密码永不返回。
+      operationId: listUsers
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/Current'
+        - $ref: '#/components/parameters/Size'
+        - name: keyword
+          in: query
+          required: false
+          description: 用户名或姓名模糊匹配
+          schema:
+            type: string
+        - name: companyId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: deptId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: status
+          in: query
+          required: false
+          description: 1启用 0停用
+          schema:
+            type: integer
+            enum: [0, 1]
+      responses:
+        '200':
+          description: 用户分页结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultUserPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [系统管理]
+      summary: 新增用户
+      description: |
+        需要 `sys:user:edit`。密码只在请求中出现一次，后端 BCrypt 存储，响应不回显。
+        `username` 全局唯一，重复返回 409；`employeeId` 已被其它账号关联时返回 409。
+      operationId: createUser
+      x-milestone: M1.5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回用户（不含密码）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/users/{id}:
+    put:
+      tags: [系统管理]
+      summary: 修改用户
+      description: |
+        需要 `sys:user:edit`。只提交需要修改的字段；`username` 不可修改。
+        不能停用自己（`status=0` 且 `id` 为当前用户）返回 409。
+      operationId: updateUser
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回用户（不含密码）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/users/{id}/reset-password:
+    post:
+      tags: [系统管理]
+      summary: 重置密码
+      description: |
+        需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效，
+        该用户已签发的 token 全部作废；新密码不会在响应中回显。
+      operationId: resetUserPassword
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '200':
+          description: 重置成功，返回用户（不含密码）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/roles:
+    get:
+      tags: [系统管理]
+      summary: 角色列表
+      description: 需要 `sys:role:view`。返回角色及其权限点（不分页）。
+      operationId: listRoles
+      x-milestone: M1.5
+      parameters:
+        - name: companyId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: status
+          in: query
+          required: false
+          description: 1启用 0停用
+          schema:
+            type: integer
+            enum: [0, 1]
+      responses:
+        '200':
+          description: 角色列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultRoleList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [系统管理]
+      summary: 新增角色
+      description: |
+        需要 `sys:role:edit`。`roleCode` 在同一主体内唯一，重复返回 409。
+        `dataScope` 只能授予当前操作者自身的数据范围或更窄者（不可越权放大）。
+      operationId: createRole
+      x-milestone: M1.5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回角色
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultRole'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/roles/{id}:
+    put:
+      tags: [系统管理]
+      summary: 修改角色
+      description: 需要 `sys:role:edit`。只提交需要修改的字段；权限点用 `/roles/{id}/grants` 单独维护。
+      operationId: updateRole
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回角色
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultRole'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/roles/{id}/grants:
+    put:
+      tags: [系统管理]
+      summary: 设置角色权限点
+      description: |
+        需要 `sys:role:edit`。**全量替换**该角色的权限点集合（先删后插，事务内完成）；
+        传空数组即清空。权限点取值见 `PermissionCode`。
+      operationId: replaceRoleGrants
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleGrantRequest'
+      responses:
+        '200':
+          description: 设置成功，返回角色（含最新权限点）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultRole'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/depts/{id}:
+    put:
+      tags: [系统管理]
+      summary: 修改部门
+      description: |
+        需要 `sys:dept:edit`。可调整上级部门；`parentId` 不能指向自己或自己的下级（400），
+        `ancestors` 由后端按新层级重算并级联更新下级。
+      operationId: updateDept
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeptUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回部门
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultDept'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/companies/{id}:
+    put:
+      tags: [系统管理]
+      summary: 修改法人主体
+      description: 需要 `sys:company:edit`。只提交需要修改的字段；`companyCode` 仍全局唯一。
+      operationId: updateCompany
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回主体
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompany'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1076,6 +1559,19 @@ components:
       pattern: '^-?[0-9]{1,10}(\.[0-9]{1,4})?$'
       example: '6.00'
 
+    PermissionCode:
+      type: string
+      description: |
+        功能权限点。取值：
+        - 核算：`payroll:record:view`、`payroll:record:edit`
+        - 期间：`payroll:period:lock`、`payroll:period:unlock`
+        - 导入导出：`payroll:import:submit`、`payroll:export`
+        - 敏感字段：`payroll:sensitive:view`
+        - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
+          `sys:role:edit`、`sys:dept:edit`、`sys:company:edit`
+      maxLength: 64
+      example: sys:user:view
+
     ErrorCode:
       type: integer
       format: int32
@@ -1159,6 +1655,16 @@ components:
       type: string
       description: 年度汇总分组方式（EMP 按人 / DEPT 按部门）
       enum: [EMP, DEPT]
+
+    ReportType:
+      type: string
+      description: 报表类型（MONTHLY 月度 / ANNUAL 年度）
+      enum: [MONTHLY, ANNUAL]
+
+    ReportFormat:
+      type: string
+      description: 导出文件格式（当前仅 XLSX）
+      enum: [XLSX]
 
     # ---------------------------------------------------------------
     # 认证
@@ -1996,8 +2502,7 @@ components:
           description: 解锁原因，必填，写入审计
 
     # ---------------------------------------------------------------
-    # 导入（M2）
-    # ---------------------------------------------------------------
+    # 导入    # ---------------------------------------------------------------
     ImportError:
       type: object
       required: [rowNo, errorCode, errorMsg]
@@ -2052,8 +2557,7 @@ components:
           type: integer
 
     # ---------------------------------------------------------------
-    # 报表（M2）
-    # ---------------------------------------------------------------
+    # 报表    # ---------------------------------------------------------------
     MonthlyReportRow:
       type: object
       required:
@@ -2113,6 +2617,366 @@ components:
           $ref: '#/components/schemas/Money'
         netAmount:
           $ref: '#/components/schemas/Money'
+
+    # ---------------------------------------------------------------
+    # 报表导出（M1.5）
+    # ---------------------------------------------------------------
+    ReportExportParams:
+      type: object
+      description: |
+        查询条件。`MONTHLY` 必填 `periodYm`；`ANNUAL` 必填 `year` 与 `groupBy`。
+        全部报表仅统计 `LOCKED` 与 `ARCHIVED` 期间，并按当前用户的数据范围过滤。
+      properties:
+        periodYm:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          description: 月度报表必填，如 "2026-11"
+        year:
+          type: string
+          pattern: '^[0-9]{4}$'
+          description: 年度报表必填，如 "2026"
+        groupBy:
+          $ref: '#/components/schemas/ReportGroupBy'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        deptId:
+          $ref: '#/components/schemas/Id'
+
+    ExportRequest:
+      type: object
+      required: [reportType, params, format]
+      properties:
+        reportType:
+          $ref: '#/components/schemas/ReportType'
+        params:
+          $ref: '#/components/schemas/ReportExportParams'
+        format:
+          $ref: '#/components/schemas/ReportFormat'
+
+    # ---------------------------------------------------------------
+    # 系统管理（M1.5）
+    # ---------------------------------------------------------------
+    User:
+      type: object
+      description: 系统用户。密码哈希永不返回；手机号只返回掩码。
+      required:
+        [id, companyId, username, realName, status, roleIds, permissions, dataScope]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        username:
+          type: string
+          maxLength: 64
+        realName:
+          type: string
+          maxLength: 64
+        employeeId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 关联人员 ID；未关联人员时为 null
+        deptId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        mobileMask:
+          type: string
+          nullable: true
+          maxLength: 16
+          example: 138****8000
+        status:
+          type: integer
+          description: 1启用 0停用
+          enum: [0, 1]
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+        roleIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+        permissions:
+          type: array
+          description: 该用户经全部角色合并后的权限点（只读）
+          items:
+            $ref: '#/components/schemas/PermissionCode'
+        dataScope:
+          $ref: '#/components/schemas/DataScope'
+
+    UserPage:
+      type: object
+      required: [records, total, current, size]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+        current:
+          type: integer
+        size:
+          type: integer
+
+    UserCreateRequest:
+      type: object
+      required: [companyId, username, password, realName]
+      properties:
+        companyId:
+          $ref: '#/components/schemas/Id'
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          description: 明文只在请求中出现一次，后端 BCrypt 存储
+        realName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        employeeId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        deptId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        mobile:
+          type: string
+          nullable: true
+          maxLength: 20
+          description: 手机号明文，后端加密存储并只回显掩码
+        status:
+          type: integer
+          enum: [0, 1]
+          default: 1
+        roleIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Id'
+          default: []
+
+    UserUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段；`username` 与 `companyId` 不可修改。
+      properties:
+        realName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        employeeId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        deptId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        mobile:
+          type: string
+          nullable: true
+          maxLength: 20
+        status:
+          type: integer
+          enum: [0, 1]
+        roleIds:
+          type: array
+          description: 全量替换用户角色
+          items:
+            $ref: '#/components/schemas/Id'
+
+    ResetPasswordRequest:
+      type: object
+      required: [newPassword]
+      properties:
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          description: 重置后旧密码立即失效，该用户已签发的 token 全部作废
+
+    Role:
+      type: object
+      required: [id, companyId, roleCode, roleName, dataScope, status, permissions]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        roleCode:
+          type: string
+          maxLength: 64
+        roleName:
+          type: string
+          maxLength: 64
+        dataScope:
+          $ref: '#/components/schemas/DataScope'
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+        status:
+          type: integer
+          description: 1启用 0停用
+          enum: [0, 1]
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionCode'
+
+    RoleCreateRequest:
+      type: object
+      required: [companyId, roleCode, roleName, dataScope]
+      properties:
+        companyId:
+          $ref: '#/components/schemas/Id'
+        roleCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+        roleName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        dataScope:
+          $ref: '#/components/schemas/DataScope'
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+        status:
+          type: integer
+          enum: [0, 1]
+          default: 1
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionCode'
+          default: []
+
+    RoleUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段；权限点请使用 `PUT /roles/{id}/grants`。
+      properties:
+        roleCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+        roleName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        dataScope:
+          $ref: '#/components/schemas/DataScope'
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+        status:
+          type: integer
+          enum: [0, 1]
+
+    RoleGrantRequest:
+      type: object
+      description: 全量替换角色的权限点集合；传空数组即清空。
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionCode'
+
+    CompanyCreateRequest:
+      type: object
+      required: [companyCode, companyName]
+      properties:
+        companyCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        companyName:
+          type: string
+          minLength: 1
+          maxLength: 128
+        status:
+          type: integer
+          enum: [0, 1]
+          default: 1
+
+    CompanyUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段。
+      properties:
+        companyCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        companyName:
+          type: string
+          minLength: 1
+          maxLength: 128
+        status:
+          type: integer
+          enum: [0, 1]
+
+    DeptCreateRequest:
+      type: object
+      required: [companyId, deptCode, deptName]
+      properties:
+        companyId:
+          $ref: '#/components/schemas/Id'
+        parentId:
+          type: string
+          pattern: '^[0-9]+$'
+          default: '0'
+          description: 上级部门 ID；根部门为 "0"
+        deptCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        deptName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        sortNo:
+          type: integer
+          format: int32
+          default: 0
+        status:
+          type: integer
+          enum: [0, 1]
+          default: 1
+
+    DeptUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段；`companyId` 不可修改，`ancestors` 由后端重算。
+      properties:
+        parentId:
+          type: string
+          pattern: '^[0-9]+$'
+        deptCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        deptName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        sortNo:
+          type: integer
+          format: int32
+        status:
+          type: integer
+          enum: [0, 1]
 
     # ---------------------------------------------------------------
     # 统一响应包的具体类型
@@ -2391,3 +3255,77 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnnualReportRow'
+
+    ResultCompany:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/Company'
+
+    ResultDept:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/Dept'
+
+    ResultUser:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/User'
+
+    ResultUserPage:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/UserPage'
+
+    ResultRole:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/Role'
+
+    ResultRoleList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
