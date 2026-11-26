@@ -190,7 +190,10 @@ paths:
     get:
       tags: [组织]
       summary: 部门树（扁平）
-      description: 返回指定主体下的扁平部门列表，`ancestors` 为祖先路径，前端自行组装树。
+      description: |
+        返回指定主体下的扁平部门列表，`ancestors` 为祖先路径，前端自行组装树。
+        权限：已认证用户即可读（部门树是人员、期间筛选与编制台的公共基础数据，
+        不额外要求系统管理权限点）。
       operationId: listDepts
       x-milestone: M1
       parameters:
@@ -200,6 +203,13 @@ paths:
           description: 法人主体 ID
           schema:
             $ref: '#/components/schemas/Id'
+        - name: includeDisabled
+          in: query
+          required: false
+          description: 是否包含停用部门；默认 false（仅返回启用部门）
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: 部门列表
@@ -843,7 +853,12 @@ paths:
     post:
       tags: [导入]
       summary: 上传并预校验
-      description: 需要 `payroll:import:submit`。只预校验不落库；返回批次号、成功/失败行数与错误明细。
+      description: |
+        需要 `payroll:import:submit`。**不写入核算数据**
+        （`pay_record` / `pay_record_item`）；但持久化 `pay_import_batch`、
+        `pay_import_error` 与原始文件，保证刷新后可回捞 batchId 与错误明细、
+        也可按批次重放。提交时按批次重放并**重新校验**。
+        返回批次号、成功/失败行数与错误明细。
       operationId: validateImport
       x-milestone: M1.5
       requestBody:
@@ -1091,7 +1106,9 @@ paths:
         需要 `payroll:export` 权限；导出成功写审计日志（`pay_audit_log`，
         `action=EXPORT`，记录查询条件与导出行数）。
         数据范围过滤与查询接口一致（`SELF` / `DEPT` / `DEPT_SUB` / `COMPANY` / `ALL`）。
-        金额列以文本格式写入，避免 Excel 转为科学计数法。
+        金额列以**数值类型**写入，并设单元格数字格式 `#,##0.00`（保证 Excel 中可
+        直接 SUM）；证件号、银行卡号、工号以**文本格式**写入（这些长数字才会被
+        Excel 转成科学计数法）。
 
         **响应格式**：成功时 `200` 直接返回二进制 xlsx 流，**不使用统一响应包**；
         文件名由 `Content-Disposition: attachment` 给出（含报表类型、期间与时间戳）。
@@ -1556,7 +1573,7 @@ paths:
       summary: 删除部门
       description: |
         需要 `sys:dept:edit`。逻辑删除（`deleted=1`）；
-        存在启用下级部门或关联人员/用户时返回 409，需先迁移或停用下级。
+        存在下级部门或关联员工/用户时返回 409，需先迁移下级与关联数据。
       operationId: deleteDept
       x-milestone: M1.5
       parameters:
@@ -2758,7 +2775,10 @@ components:
     # 报表    # ---------------------------------------------------------------
     MonthlyReportRow:
       type: object
-      description: 仅统计 `LOCKED` 与 `ARCHIVED` 期间；按部门汇总。
+      description: |
+        仅统计 `LOCKED` 与 `ARCHIVED` 期间；按部门汇总。
+        `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+        因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
       required:
         [companyId, periodYm, deptId, employeeCount, grossAmount,
          deductionAmount, netAmount]
@@ -2787,6 +2807,8 @@ components:
       description: |
         仅统计 `LOCKED` 与 `ARCHIVED` 期间；年度按**归属期间**归集，
         13 薪与年终奖计入其归属月份所在年度。
+        `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+        因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
       required:
         [year, groupBy, employeeCount, grossAmount, deductionAmount, netAmount]
       properties:
