@@ -1,0 +1,67 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: #303133;
+  background: #f5f7fa;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.amount-cell {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.muted {
+  color: #909399;
+}
+
+/* 冲突行高亮（changeset 保存 409） */
+.row-conflict > td {
+  background-color: #fef0f0 !important;
+}
+
+.row-dirty > td {
+  background-color: #fdf6ec !important;
+}

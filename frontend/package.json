@@ -1,0 +1,38 @@
+{
+  "name": "payroll-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "gen:types": "openapi-typescript ../docs/api/openapi.yaml -o src/api/types.ts"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "axios": "^1.7.9",
+    "decimal.js": "^10.4.3",
+    "element-plus": "^2.9.1",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0",
+    "vxe-table": "^4.9.18",
+    "xe-utils": "^3.5.33"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^25.0.1",
+    "msw": "^2.7.0",
+    "openapi-typescript": "^7.4.4",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.7",
+    "vitest": "^3.2.7",
+    "vue-tsc": "^2.2.0"
+  }
+}
