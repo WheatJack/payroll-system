@@ -12,5 +12,6 @@ public class AuthUserRow {
     private String passwordHash;
     private String realName;
     private Long employeeId;
+    private Long deptId;
     private Integer status;
 }

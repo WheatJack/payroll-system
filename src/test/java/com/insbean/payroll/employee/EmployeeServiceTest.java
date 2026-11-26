@@ -138,9 +138,23 @@ class EmployeeServiceTest extends AbstractDbTest {
         Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
 
         assertThatThrownBy(() -> service.transfer(id, TestDb.COMPANY_BEIJING, TestDb.DEPT_BEIJING,
-                LocalDate.of(2020, 3, 1)))
+                LocalDate.of(2019, 1, 1)))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("必须晚于");
+                .hasMessageContaining("不能早于");
+    }
+
+    @Test
+    void 当天入职当天调部门也能落到新区间() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+        LocalDate hireDate = LocalDate.of(2020, 3, 1);
+
+        service.transfer(id, TestDb.COMPANY_BEIJING, TestDb.DEPT_BEIJING, hireDate);
+
+        // 当天双区间并存：查归属按 start_date DESC 取最新，于是当天归新部门
+        assertThat(service.companyAt(id, hireDate)).isEqualTo(TestDb.COMPANY_BEIJING);
+        Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employment WHERE employee_id = ?", Integer.class, id);
+        assertThat(rows).isEqualTo(2);
     }
 
     @Test

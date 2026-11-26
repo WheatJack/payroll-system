@@ -12,6 +12,7 @@ import com.insbean.payroll.employee.dto.EmployeeSaveReq;
 import com.insbean.payroll.employee.mapper.EmployeeMapper;
 import com.insbean.payroll.employee.mapper.EmploymentMapper;
 import com.insbean.payroll.security.CryptoService;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,13 +25,16 @@ public class EmployeeService {
     private final EmployeeMapper employeeMapper;
     private final EmploymentMapper employmentMapper;
     private final CryptoService cryptoService;
+    private final DataScopeEnforcer dataScope;
 
     public EmployeeService(EmployeeMapper employeeMapper,
                            EmploymentMapper employmentMapper,
-                           CryptoService cryptoService) {
+                           CryptoService cryptoService,
+                           DataScopeEnforcer dataScope) {
         this.employeeMapper = employeeMapper;
         this.employmentMapper = employmentMapper;
         this.cryptoService = cryptoService;
+        this.dataScope = dataScope;
     }
 
     @Transactional
@@ -45,6 +49,8 @@ public class EmployeeService {
         if (req.hireDate() == null) {
             throw new BizException(400, "入职日期必填");
         }
+        Long companyId = req.companyId() != null ? req.companyId() : defaultCompanyId;
+        dataScope.assertCompanyVisible(companyId);
 
         String hash = cryptoService.blindIndex(req.idNo());
         if (employeeMapper.countByIdNoHash(hash) > 0) {
@@ -55,7 +61,7 @@ public class EmployeeService {
         }
 
         EmpEmployeeEntity entity = new EmpEmployeeEntity();
-        entity.setCompanyId(req.companyId() != null ? req.companyId() : defaultCompanyId);
+        entity.setCompanyId(companyId);
         entity.setEmpNo(req.empNo());
         entity.setName(req.name());
         entity.setGender(req.gender() == null ? 0 : req.gender());
@@ -94,9 +100,13 @@ public class EmployeeService {
 
     @Transactional
     public EmployeeDTO update(Long id, EmployeeSaveReq req) {
+        dataScope.assertEmployeeVisible(id);
         EmpEmployeeEntity entity = employeeMapper.selectById(id);
         if (entity == null) {
             throw new BizException(404, "人员不存在");
+        }
+        if (req.companyId() != null) {
+            dataScope.assertCompanyVisible(req.companyId());
         }
         if (req.empNo() != null && !req.empNo().equals(entity.getEmpNo())) {
             if (employeeMapper.countByEmpNoExcluding(req.empNo(), id) > 0) {
@@ -167,7 +177,8 @@ public class EmployeeService {
         if (!Objects.equals(previousCompany, entity.getCompanyId())
                 || !Objects.equals(previousDept, entity.getDeptId())) {
             // 调动：关闭旧区间 + 追加新区间（R12）。绝不就地改写既有行。
-            transfer(entity.getId(), entity.getCompanyId(), entity.getDeptId(), LocalDate.now());
+            LocalDate effectiveDate = req.effectiveDate() != null ? req.effectiveDate() : LocalDate.now();
+            transfer(entity.getId(), entity.getCompanyId(), entity.getDeptId(), effectiveDate);
         }
         return toDto(entity);
     }
@@ -179,13 +190,19 @@ public class EmployeeService {
      * 旧区间在 {@code effectiveDate - 1} 关闭，新区间从 {@code effectiveDate} 起生效，
      * {@code change_type = TRANSFER}。这样解锁重算历史期间时，取到的仍是当时的主体。
      *
-     * @param effectiveDate 调动生效日（含），必须晚于当前任职区间的起始日
+     * <p>「当天入职当天调部门」：新区间不能比旧区间还早，此时旧区间以
+     * {@code end_date = effectiveDate} 关闭（当天双区间并存），查归属时按
+     * {@code start_date DESC} 取最新的那条，于是当天归属新部门，之前归属旧部门。
+     *
+     * @param effectiveDate 调动生效日（含），不得早于当前任职区间的起始日
      */
     @Transactional
     public void transfer(Long employeeId, Long companyId, Long deptId, LocalDate effectiveDate) {
         if (effectiveDate == null) {
             throw new BizException(400, "调动生效日必填");
         }
+        dataScope.assertEmployeeVisible(employeeId);
+        dataScope.assertCompanyVisible(companyId);
         requireEmployee(employeeId);
 
         EmpEmploymentEntity open = employmentMapper.selectOne(
@@ -195,10 +212,13 @@ public class EmployeeService {
                         .orderByDesc(EmpEmploymentEntity::getStartDate)
                         .last("LIMIT 1"));
         if (open != null) {
-            if (!effectiveDate.isAfter(open.getStartDate())) {
-                throw new BizException(400, "调动生效日必须晚于当前任职区间的起始日");
+            if (effectiveDate.isBefore(open.getStartDate())) {
+                throw new BizException(400, "调动生效日不能早于当前任职区间的起始日");
             }
-            employmentMapper.closeInterval(open.getId(), effectiveDate.minusDays(1));
+            LocalDate closeAt = effectiveDate.equals(open.getStartDate())
+                    ? effectiveDate
+                    : effectiveDate.minusDays(1);
+            employmentMapper.closeInterval(open.getId(), closeAt);
         }
 
         EmpEmploymentEntity entity = new EmpEmploymentEntity();
@@ -221,6 +241,7 @@ public class EmployeeService {
     }
 
     public EmployeeDTO get(Long id) {
+        dataScope.assertEmployeeVisible(id);
         EmpEmployeeEntity entity = employeeMapper.selectById(id);
         if (entity == null) {
             throw new BizException(404, "人员不存在");
@@ -229,8 +250,10 @@ public class EmployeeService {
     }
 
     public EmployeePageDTO page(EmployeeQuery query, Long companyId) {
+        dataScope.assertCompanyVisible(companyId);
         var wrapper = Wrappers.<EmpEmployeeEntity>lambdaQuery()
                 .eq(EmpEmployeeEntity::getCompanyId, companyId);
+        dataScope.applyEmployeeFilter(wrapper);
         if (query.keyword() != null && !query.keyword().isBlank()) {
             String keyword = query.keyword().trim();
             wrapper.and(w -> w.like(EmpEmployeeEntity::getEmpNo, keyword)

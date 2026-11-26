@@ -179,7 +179,6 @@ class GenerateServiceTest extends AbstractDbTest {
 
     @Test
     void 入职当月按工作日折算基本工资() {
-        // 2026-11-16(周一) 入职，当月剩余 11 个工作日（15 个自然日）
         Long empId = createEmployee("E200", "110101199001016666",
                 TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT, LocalDate.of(2026, 11, 16));
         compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2026, 11, 16),
@@ -190,6 +189,103 @@ class GenerateServiceTest extends AbstractDbTest {
         // 8000 / 21.75 * 11 = 4045.977… → 4045.98
         // 若误用自然日会得到 8000 / 21.75 * 15 = 5517.24
         assertThat(itemAmount("E200", "BASE_SALARY")).isEqualByComparingTo("4045.98");
+    }
+
+    @Test
+    void 入职日等于期间首日不发折算工资() {
+        Long p = periodService.create(new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        Long empId = createEmployee("E300", "110101199001018888",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT, LocalDate.of(2026, 12, 1));
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2026, 12, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(p, OPERATOR);
+
+        // 2026-12 有 23 个工作日。误判成不足月会得到 8000/21.75×23 = 8459.77，全月反而多发
+        assertThat(itemAmountIn(p, "E300", "BASE_SALARY")).isEqualByComparingTo("8000.00");
+    }
+
+    @Test
+    void 离职日等于期间末日不发折算工资() {
+        Long p = periodService.create(new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        Long empId = createEmployee("E301", "110101199001017777",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT,
+                LocalDate.of(2020, 1, 1), LocalDate.of(2026, 12, 31), 2);
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2020, 1, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(p, OPERATOR);
+
+        assertThat(itemAmountIn(p, "E301", "BASE_SALARY")).isEqualByComparingTo("8000.00");
+    }
+
+    @Test
+    void 工作日少的月份全月在岗也是全额() {
+        Long p = periodService.create(new PeriodCreateReq(null, "2026-02"), TestDb.COMPANY_DEFAULT).id();
+        Long empId = createEmployee("E302", "110101199001016666",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT, LocalDate.of(2026, 2, 1));
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2026, 2, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(p, OPERATOR);
+
+        // 2026-02 只有 20 个工作日，但全月在岗就是全额，不因工作日少而少发
+        assertThat(itemAmountIn(p, "E302", "BASE_SALARY")).isEqualByComparingTo("8000.00");
+    }
+
+    @Test
+    void 离职状态的人当月仍要发工资() {
+        Long empId = createEmployee("E303", "110101199001015555",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT,
+                LocalDate.of(2020, 1, 1), LocalDate.of(2026, 11, 15), 2);
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2020, 1, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(periodId, OPERATOR);
+
+        // 2026-11-01..11-15 共 10 个工作日 → 8000 / 21.75 × 10 = 3678.16
+        // 用 status=1 过滤的话这条记录根本不会生成，HR 先置离职状态就一分钱不发
+        assertThat(itemAmount("E303", "BASE_SALARY")).isEqualByComparingTo("3678.16");
+    }
+
+    @Test
+    void 计薪天数参数取自期间而不是硬编码() {
+        jdbc.update("UPDATE pay_period SET hpd = 20.00 WHERE id = ?", periodId);
+        Long empId = createEmployee("E400", "110101199001014444",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT, LocalDate.of(2026, 11, 16));
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2026, 11, 16),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(periodId, OPERATOR);
+
+        // 8000 / 20 × 11 = 4400.00；写死 21.75 会得到 4045.98
+        assertThat(itemAmount("E400", "BASE_SALARY")).isEqualByComparingTo("4400.00");
+    }
+
+    @Test
+    void 部门快照取期间末日的归属部门() {
+        jdbc.update("""
+                INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status)
+                VALUES (10, 1, 1, 'D010', '研发组', ',1,', 10, 1)
+                """);
+        Long empId = createEmployee("E500", "110101199001013333",
+                TestDb.COMPANY_DEFAULT, TestDb.DEPT_DEFAULT, LocalDate.of(2020, 1, 1));
+        compProfileService.save(new CompProfileSaveReq(null, empId, LocalDate.of(2020, 1, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(periodId, OPERATOR);
+        assertThat(deptNameOf(periodId, "E500")).isEqualTo("综合部");
+
+        // 12 月调到研发组
+        employeeService.transfer(empId, TestDb.COMPANY_DEFAULT, 10L, LocalDate.of(2026, 12, 1));
+
+        // 重算 11 月仍应取 11-30 的归属部门，而不是今天的部门
+        generateService.startGenerate(periodId, OPERATOR);
+        assertThat(deptNameOf(periodId, "E500")).isEqualTo("综合部");
+
+        Long december = periodService.create(new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(december, OPERATOR);
+        assertThat(deptNameOf(december, "E500")).isEqualTo("研发组");
     }
 
     @Test
@@ -239,9 +335,27 @@ class GenerateServiceTest extends AbstractDbTest {
     }
 
     private Long createEmployee(String empNo, String idNo, long companyId, long deptId, LocalDate hireDate) {
+        return createEmployee(empNo, idNo, companyId, deptId, hireDate, null, 1);
+    }
+
+    private Long createEmployee(String empNo, String idNo, long companyId, long deptId,
+                                LocalDate hireDate, LocalDate leaveDate, int status) {
         return employeeService.create(new EmployeeSaveReq(
                 null, empNo, "员工" + empNo, 1, "ID_CARD", idNo, null,
                 "REGULAR", "P6", "工程师", deptId,
-                hireDate, null, null, 1, null), companyId);
+                hireDate, null, leaveDate, status, null), companyId);
+    }
+
+    private BigDecimal itemAmountIn(Long periodId, String empNo, String itemCode) {
+        return jdbc.queryForObject("""
+                SELECT i.amount FROM pay_record_item i JOIN pay_record r ON r.id = i.record_id
+                 WHERE r.period_id = ? AND r.emp_no = ? AND i.item_code = ?
+                """, BigDecimal.class, periodId, empNo, itemCode);
+    }
+
+    private String deptNameOf(Long periodId, String empNo) {
+        return jdbc.queryForObject(
+                "SELECT dept_name FROM pay_record WHERE period_id = ? AND emp_no = ?",
+                String.class, periodId, empNo);
     }
 }

@@ -18,3 +18,11 @@ ALTER TABLE pay_period
 
 ALTER TABLE pay_record
   MODIFY version_no INT NOT NULL DEFAULT 0;
+
+--   3) emp_comp_profile 唯一键纳入 deleted
+--      调薪不再就地 UPDATE 旧段，而是把旧段作废（deleted=1）再开新段。
+--      原来的 uk(employee_id, effective_from) 会让"作废后的旧段"仍然占着那一天，
+--      新段插不进去。把 deleted 纳入唯一键后，同一天可以有一条有效 + 若干条作废。
+ALTER TABLE emp_comp_profile
+  DROP INDEX uk_emp_effective,
+  ADD UNIQUE KEY uk_emp_effective (employee_id, effective_from, deleted);

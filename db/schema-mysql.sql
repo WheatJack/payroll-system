@@ -161,7 +161,9 @@ CREATE TABLE emp_comp_profile (
   updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   deleted        TINYINT       NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
-  UNIQUE KEY uk_emp_effective (employee_id, effective_from),
+  -- 同一员工同一生效日只允许一条"有效"档案；把 deleted 纳入唯一键，
+  -- 是为了让被作废（逻辑删除）的旧段让出这个日期，从而支持"作废旧段 + 同日重开新段"
+  UNIQUE KEY uk_emp_effective (employee_id, effective_from, deleted),
   KEY idx_emp_range (employee_id, effective_from, effective_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='薪酬档案（按生效区间版本化）';
 

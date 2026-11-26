@@ -6,6 +6,7 @@ import com.insbean.payroll.domain.entity.PayPeriodEntity;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
 import com.insbean.payroll.period.dto.PeriodDTO;
 import com.insbean.payroll.period.mapper.PeriodMapper;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,18 +37,22 @@ public class PeriodService {
     private static final String PERIOD_YM_PATTERN = "^[0-9]{4}-(0[1-9]|1[0-2])$";
 
     private final PeriodMapper periodMapper;
+    private final DataScopeEnforcer dataScope;
 
-    public PeriodService(PeriodMapper periodMapper) {
+    public PeriodService(PeriodMapper periodMapper, DataScopeEnforcer dataScope) {
         this.periodMapper = periodMapper;
+        this.dataScope = dataScope;
     }
 
     // ------------------------------------------------------------------ 查询
 
     public PeriodDTO get(Long periodId) {
+        dataScope.assertPeriodVisible(periodId);
         return toDto(requirePeriod(periodId));
     }
 
     public List<PeriodDTO> list(Long companyId) {
+        dataScope.assertCompanyVisible(companyId);
         return periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
                         .eq(PayPeriodEntity::getCompanyId, companyId)
                         .orderByDesc(PayPeriodEntity::getPeriodYm))
@@ -71,7 +76,25 @@ public class PeriodService {
      * ——调用方必须先过这一关，再做真正的事务性写入。
      */
     public void assertWritable(Long periodId) {
-        PayPeriodEntity period = requirePeriod(periodId);
+        assertWritable(requirePeriod(periodId));
+    }
+
+    /**
+     * 写事务内使用：加行锁读取期间再校验状态。
+     *
+     * <p>普通 SELECT 读到的是快照，校验通过到真正写入之间期间可能被锁定，
+     * 于是"锁定后写入"仍然能穿过去。写路径必须用 {@code SELECT ... FOR UPDATE}，
+     * 让锁定事务与写入事务在行锁上排队。
+     */
+    public void assertWritableForUpdate(Long periodId) {
+        PayPeriodEntity period = periodMapper.selectForUpdate(periodId);
+        if (period == null) {
+            throw new BizException(404, "工资期间不存在");
+        }
+        assertWritable(period);
+    }
+
+    private void assertWritable(PayPeriodEntity period) {
         PeriodStatus status = PeriodStatus.of(period.getStatus());
         if (status == PeriodStatus.LOCKED) {
             throw new BizException(409, "期间已锁定，禁止修改");
@@ -99,6 +122,7 @@ public class PeriodService {
     /** 锁定期间。只有 EDITING 可以锁定，且锁定人不能是编制人（C4）。 */
     @Transactional
     public PeriodDTO lock(Long periodId, Long userId) {
+        dataScope.assertPeriodVisible(periodId);
         PayPeriodEntity period = requirePeriod(periodId);
         PeriodStatus status = PeriodStatus.of(period.getStatus());
         if (status == PeriodStatus.LOCKED) {
@@ -126,6 +150,7 @@ public class PeriodService {
         if (reason == null || reason.isBlank()) {
             throw new BizException(400, "解锁原因必填");
         }
+        dataScope.assertPeriodVisible(periodId);
         PayPeriodEntity period = requirePeriod(periodId);
         PeriodStatus status = PeriodStatus.of(period.getStatus());
         if (status == PeriodStatus.ARCHIVED) {
@@ -170,6 +195,7 @@ public class PeriodService {
             throw new BizException(400, "期间格式必须为 YYYY-MM：" + periodYm);
         }
         Long companyId = req.companyId() != null ? req.companyId() : defaultCompanyId;
+        dataScope.assertCompanyVisible(companyId);
         PayPeriodEntity existing = findByCompanyAndYm(companyId, periodYm);
         if (existing != null) {
             return toDto(existing);
@@ -223,7 +249,11 @@ public class PeriodService {
                 e.getEmployeeCount() == null ? 0 : e.getEmployeeCount(),
                 money(e.getTotalGross()),
                 money(e.getTotalNet()),
-                e.getHpd() == null ? DEFAULT_HPD : e.getHpd());
+                e.getHpd() == null ? DEFAULT_HPD : e.getHpd(),
+                e.getCompiledBy(),
+                e.getLockedBy(),
+                e.getLockedAt(),
+                e.getUnlockReason());
     }
 
     private static BigDecimal money(BigDecimal value) {

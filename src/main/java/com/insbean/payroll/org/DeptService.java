@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insbean.payroll.domain.entity.SysDeptEntity;
 import com.insbean.payroll.org.dto.DeptDTO;
 import com.insbean.payroll.org.mapper.DeptMapper;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -12,9 +13,11 @@ import java.util.List;
 public class DeptService {
 
     private final DeptMapper deptMapper;
+    private final DataScopeEnforcer dataScope;
 
-    public DeptService(DeptMapper deptMapper) {
+    public DeptService(DeptMapper deptMapper, DataScopeEnforcer dataScope) {
         this.deptMapper = deptMapper;
+        this.dataScope = dataScope;
     }
 
     /**
@@ -22,6 +25,7 @@ public class DeptService {
      * 这样前端可以做懒加载与虚拟滚动，后端也不必为每个主体建一次递归。
      */
     public List<DeptDTO> tree(Long companyId) {
+        dataScope.assertCompanyVisible(companyId);
         return deptMapper.selectList(Wrappers.<SysDeptEntity>lambdaQuery()
                         .eq(SysDeptEntity::getCompanyId, companyId)
                         .eq(SysDeptEntity::getStatus, 1)

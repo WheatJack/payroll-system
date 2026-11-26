@@ -27,6 +27,7 @@ public class RecordAssembler {
                                     CompProfileDTO profile,
                                     PayrollResult result,
                                     PayPeriodEntity period,
+                                    Long deptId,
                                     String deptName,
                                     int seniorityYears,
                                     Long operatorId) {
@@ -37,7 +38,7 @@ public class RecordAssembler {
         record.setEmployeeId(emp.getId());
         record.setEmpNo(emp.getEmpNo());
         record.setEmpName(emp.getName());
-        record.setDeptId(emp.getDeptId());
+        record.setDeptId(deptId);
         record.setDeptName(deptName == null ? "" : deptName);
         record.setJobLevel(emp.getJobLevel());
         record.setEmployeeType(emp.getEmployeeType());

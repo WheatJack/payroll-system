@@ -4,9 +4,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.List;
 import java.util.Map;
@@ -43,6 +46,18 @@ public class GlobalExceptionHandler {
                 .toList();
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new Result<>(409, e.getMessage(), Map.of("conflicts", conflicts)));
+    }
+
+    /**
+     * 请求本身不合法（缺 body、JSON 解析失败、路径参数类型不对、缺必填查询参数）
+     * 属于客户端错误，必须是 400；落到兜底的 500 会让前端和监控把用户输入错误当成系统故障。
+     */
+    @ExceptionHandler({
+            HttpMessageNotReadableException.class,
+            MethodArgumentTypeMismatchException.class,
+            MissingServletRequestParameterException.class})
+    public ResponseEntity<Result<Void>> handleBadRequest(Exception e) {
+        return ResponseEntity.badRequest().body(Result.fail(400, "请求参数格式不正确"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

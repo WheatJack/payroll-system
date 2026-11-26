@@ -9,6 +9,7 @@ import com.insbean.payroll.employee.dto.CompProfileItemDTO;
 import com.insbean.payroll.employee.dto.CompProfileSaveReq;
 import com.insbean.payroll.employee.mapper.CompProfileItemMapper;
 import com.insbean.payroll.employee.mapper.CompProfileMapper;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,13 +37,18 @@ public class CompProfileService {
 
     private final CompProfileMapper profileMapper;
     private final CompProfileItemMapper itemMapper;
+    private final DataScopeEnforcer dataScope;
 
-    public CompProfileService(CompProfileMapper profileMapper, CompProfileItemMapper itemMapper) {
+    public CompProfileService(CompProfileMapper profileMapper,
+                              CompProfileItemMapper itemMapper,
+                              DataScopeEnforcer dataScope) {
         this.profileMapper = profileMapper;
         this.itemMapper = itemMapper;
+        this.dataScope = dataScope;
     }
 
     public List<CompProfileDTO> timeline(Long employeeId) {
+        dataScope.assertEmployeeVisible(employeeId);
         List<EmpCompProfileEntity> profiles = loadTimeline(employeeId);
         Map<Long, List<CompProfileItemDTO>> items = loadItems(profiles.stream()
                 .map(EmpCompProfileEntity::getId).toList());
@@ -80,13 +86,26 @@ public class CompProfileService {
         if (old == null) {
             throw new BizException(404, "薪酬档案不存在");
         }
+        if (old.getStatus() != null && old.getStatus() == 2) {
+            throw new BizException(400, "该薪酬档案已作废，请基于当前生效档案修改");
+        }
+        // items == null 表示"不改固定津贴"（沿用旧段），List.of() 才表示"清空"
+        List<CompProfileItemDTO> items = req.items() != null
+                ? req.items()
+                : loadItems(List.of(id)).getOrDefault(id, List.of());
         return save(new CompProfileSaveReq(
                 id,
                 old.getEmployeeId(),
-                req.effectiveFrom() != null ? req.effectiveFrom() : old.getEffectiveFrom(),
+                // 生效日默认次月 1 日：界面上"改薪酬"是面向未来的动作，默认不追溯
+                req.effectiveFrom() != null ? req.effectiveFrom() : nextMonthFirstDay(),
                 req.baseSalary() != null ? req.baseSalary() : old.getBaseSalary(),
                 req.changeReason() != null ? req.changeReason() : old.getChangeReason(),
-                req.items() != null ? req.items() : List.of()));
+                items));
+    }
+
+    /** 默认生效日：次月 1 日。调薪一律面向未来，避免默认追溯改写历史期间。 */
+    public static LocalDate nextMonthFirstDay() {
+        return LocalDate.now().plusMonths(1).withDayOfMonth(1);
     }
 
     /**
@@ -107,24 +126,18 @@ public class CompProfileService {
         if (req.baseSalary().signum() < 0) {
             throw new BizException(400, "基本工资不能为负数");
         }
+        // 薪酬属于敏感数据，按人员的数据范围校验（SELF 只能碰自己的档案）
+        dataScope.assertEmployeeVisible(req.employeeId());
 
         LocalDate from = req.effectiveFrom();
         List<EmpCompProfileEntity> timeline = loadTimeline(req.employeeId());
 
-        // 1) 同一天已有档案 → 就地替换，id 保持不变
+        // 1) 同一天已有档案 → 把它作废（status=2，原值原日期全部保留供审计），
+        //    再从同一天插入新段。绝不就地 UPDATE 旧行的金额/生效日。
         EmpCompProfileEntity sameDay = timeline.stream()
                 .filter(p -> p.getEffectiveFrom().equals(from))
                 .findFirst()
                 .orElse(null);
-        if (sameDay != null) {
-            sameDay.setBaseSalary(store(req.baseSalary()));
-            sameDay.setChangeReason(req.changeReason());
-            sameDay.setStatus(1);
-            profileMapper.updateById(sameDay);
-            replaceItems(sameDay.getId(), req.items());
-            assertNoOverlap(req.employeeId());
-            return toDto(sameDay, normalizeItems(req.items()));
-        }
 
         // 2) 截断被新区间覆盖的旧段，新区间继承它的右端，保证不留空洞
         LocalDate newTo;
@@ -137,6 +150,8 @@ public class CompProfileService {
             newTo = covering.getEffectiveTo();
             covering.setEffectiveTo(from.minusDays(1));
             profileMapper.updateById(covering);
+        } else if (sameDay != null) {
+            newTo = sameDay.getEffectiveTo();
         } else {
             newTo = timeline.stream()
                     .map(EmpCompProfileEntity::getEffectiveFrom)
@@ -144,6 +159,12 @@ public class CompProfileService {
                     .min(LocalDate::compareTo)
                     .map(d -> d.minusDays(1))
                     .orElse(null);
+        }
+
+        if (sameDay != null) {
+            // 作废（逻辑删除）而不是就地 UPDATE：金额/生效日原样保留可审计，
+            // 唯一键含 deleted，所以同一天还能再插一条有效段。
+            profileMapper.deleteById(sameDay.getId());
         }
 
         EmpCompProfileEntity entity = new EmpCompProfileEntity();

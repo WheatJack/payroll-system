@@ -17,12 +17,14 @@ import com.insbean.payroll.employee.CompProfileService;
 import com.insbean.payroll.employee.dto.CompProfileDTO;
 import com.insbean.payroll.employee.dto.CompProfileItemDTO;
 import com.insbean.payroll.employee.mapper.EmployeeMapper;
+import com.insbean.payroll.employee.mapper.EmploymentMapper;
 import com.insbean.payroll.item.ItemService;
 import com.insbean.payroll.item.dto.PayItemDefDTO;
 import com.insbean.payroll.org.mapper.DeptMapper;
 import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.mapper.PeriodMapper;
 import com.insbean.payroll.record.RecordAssembler;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
 import com.insbean.payroll.run.mapper.PayRecordItemMapper;
@@ -77,11 +79,17 @@ public class GenerateService {
 
     private static final String SKIP_NO_PROFILE = "未配置薪酬档案";
 
+    /** error_msg 是 TEXT(64KB)，进度明细必须设上限，否则 closeRun 自己会因超长而失败。 */
+    private static final int MAX_ERROR_ENTRIES = 200;
+    private static final int MAX_SKIPPED_ENTRIES = 500;
+    private static final int MAX_ERROR_MSG_LENGTH = 60_000;
+
     private final PeriodService periodService;
     private final PeriodMapper periodMapper;
     private final ItemService itemService;
     private final CompProfileService compProfileService;
     private final EmployeeMapper employeeMapper;
+    private final EmploymentMapper employmentMapper;
     private final DeptMapper deptMapper;
     private final PayRecordMapper recordMapper;
     private final PayRecordItemMapper recordItemMapper;
@@ -89,6 +97,7 @@ public class GenerateService {
     private final RecordAssembler recordAssembler;
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
+    private final DataScopeEnforcer dataScope;
     private final TransactionTemplate transactionTemplate;
 
     private final PayrollCalculator calculator = new PayrollCalculator();
@@ -98,6 +107,7 @@ public class GenerateService {
                            ItemService itemService,
                            CompProfileService compProfileService,
                            EmployeeMapper employeeMapper,
+                           EmploymentMapper employmentMapper,
                            DeptMapper deptMapper,
                            PayRecordMapper recordMapper,
                            PayRecordItemMapper recordItemMapper,
@@ -105,12 +115,14 @@ public class GenerateService {
                            RecordAssembler recordAssembler,
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
+                           DataScopeEnforcer dataScope,
                            PlatformTransactionManager transactionManager) {
         this.periodService = periodService;
         this.periodMapper = periodMapper;
         this.itemService = itemService;
         this.compProfileService = compProfileService;
         this.employeeMapper = employeeMapper;
+        this.employmentMapper = employmentMapper;
         this.deptMapper = deptMapper;
         this.recordMapper = recordMapper;
         this.recordItemMapper = recordItemMapper;
@@ -118,6 +130,7 @@ public class GenerateService {
         this.recordAssembler = recordAssembler;
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
+        this.dataScope = dataScope;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -128,6 +141,7 @@ public class GenerateService {
      * @throws BizException 期间已锁定 / 期间正被其他任务处理 / 跨主体同月重复
      */
     public Long startGenerate(Long periodId, Long operatorId) {
+        dataScope.assertPeriodVisible(periodId);
         PayPeriodEntity period = periodService.requirePeriod(periodId);
         periodService.assertWritable(periodId);
 
@@ -161,6 +175,8 @@ public class GenerateService {
         if (run == null) {
             throw new BizException(404, "核算批次不存在");
         }
+        // 批次属于某个期间的某个主体，越权的人不该看到别家的进度与错误明细
+        dataScope.assertPeriodVisible(run.getPeriodId());
         Progress progress = readProgress(run.getErrorMsg());
         List<RunErrorDTO> errors = new ArrayList<>();
         if (progress.failure != null && !progress.failure.isBlank()) {
@@ -202,6 +218,9 @@ public class GenerateService {
                               List<EmpEmployeeEntity> batch,
                               Long operatorId,
                               Progress progress) {
+        // 每批都在事务内重新加锁校验期间状态：批次之间可能被锁定，
+        // 只在入口校验一次的话，锁定后的批次照样会写进去。
+        periodService.assertWritableForUpdate(period.getId());
         List<PayRecordEntity> existing = recordMapper.lockByPeriod(period.getId(), period.getCompanyId());
         Map<Long, PayRecordEntity> existingByEmployee = existing.stream()
                 .collect(Collectors.toMap(PayRecordEntity::getEmployeeId, Function.identity(), (a, b) -> a));
@@ -233,7 +252,8 @@ public class GenerateService {
                         emp.getId(), emp.getEmpNo(), emp.getName(), profile.baseSalary(),
                         emp.getHireDate(), emp.getLeaveDate(), periodStart, periodEnd,
                         payableDays(emp, periodStart, periodEnd),
-                        itemDefs, fixedItems, variableItems));
+                        itemDefs, fixedItems, variableItems,
+                        period.getHpd()));
             } catch (RuntimeException e) {
                 progress.errors.add(new RunErrorDTO(emp.getEmpNo(), "计算失败：" + e.getMessage()));
                 progress.failed++;
@@ -241,9 +261,14 @@ public class GenerateService {
             }
 
             int seniorityYears = calculator.seniorityYears(emp.getHireDate(), periodEnd);
-            String deptName = deptMapper.findNameById(emp.getDeptId());
+            // 部门快照与 company_id 同口径：取期间末日的任职部门，而不是人员表的当前部门
+            Long deptId = employmentMapper.findDeptAt(emp.getId(), periodEnd);
+            if (deptId == null) {
+                deptId = emp.getDeptId();
+            }
+            String deptName = deptMapper.findNameById(deptId);
             PayRecordEntity record = recordAssembler.toRecord(
-                    emp, profile, result, period, deptName, seniorityYears, operatorId);
+                    emp, profile, result, period, deptId, deptName, seniorityYears, operatorId);
 
             if (existingRecord != null) {
                 record.setId(existingRecord.getId());
@@ -302,16 +327,20 @@ public class GenerateService {
      *
      * <p>计薪天数是**工作日**口径：21.75 = (365 − 104) ÷ 12，分母本身就排除了周末。
      * 用自然日做分子会造成量纲错误（2026-11-16 入职：11 个工作日 vs 15 个自然日）。
+     *
+     * <p>边界必须用严格比较：入职日 == 期间首日 / 离职日 == 期间末日 **都属于全月**。
+     * 用 {@code !isBefore} 之类会把全月误判成不足月——23 个工作日的月份因子会变成
+     * 23/21.75 = 1.0575，全月在职工资反而多发 5.7%。
      */
     Integer payableDays(EmpEmployeeEntity emp, LocalDate periodStart, LocalDate periodEnd) {
         LocalDate from = periodStart;
         LocalDate to = periodEnd;
         boolean prorated = false;
-        if (emp.getHireDate() != null && !emp.getHireDate().isBefore(periodStart)) {
+        if (emp.getHireDate() != null && emp.getHireDate().isAfter(periodStart)) {
             from = emp.getHireDate();
             prorated = true;
         }
-        if (emp.getLeaveDate() != null && !emp.getLeaveDate().isAfter(periodEnd)) {
+        if (emp.getLeaveDate() != null && emp.getLeaveDate().isBefore(periodEnd)) {
             to = emp.getLeaveDate();
             prorated = true;
         }
@@ -372,15 +401,47 @@ public class GenerateService {
         periodMapper.updateById(update);
     }
 
+    /**
+     * 进度序列化。
+     *
+     * <p>pay_run.error_msg 是 TEXT（64KB）。上万人规模的 skipped/errors 会直接超限，
+     * 导致 closeRun 自己抛错、批次永远停在 RUNNING。这里做两级截断：
+     * 先限制条数，再兜底限制长度，保证写入永远成功（宁可丢明细也不能丢状态）。
+     */
     private String writeProgress(Progress progress) {
         try {
-            return objectMapper.writeValueAsString(new ProgressPayload(
-                    progress.total, progress.success, progress.failed,
-                    progress.failure, progress.errors, progress.skipped));
+            ProgressPayload payload = new ProgressPayload(
+                    progress.total, progress.success, progress.failed, progress.failure,
+                    truncate(progress.errors, MAX_ERROR_ENTRIES),
+                    truncate(progress.skipped, MAX_SKIPPED_ENTRIES));
+            String json = objectMapper.writeValueAsString(payload);
+            if (json.length() <= MAX_ERROR_MSG_LENGTH) {
+                return json;
+            }
+            ProgressPayload summary = new ProgressPayload(
+                    progress.total, progress.success, progress.failed, progress.failure,
+                    List.of(), Map.of("_truncated",
+                    "明细过多已省略：errors=" + progress.errors.size()
+                            + "，skipped=" + progress.skipped.size()));
+            return objectMapper.writeValueAsString(summary);
         } catch (Exception e) {
             log.warn("进度序列化失败", e);
             return null;
         }
+    }
+
+    private static <T> List<T> truncate(List<T> source, int max) {
+        return source.size() <= max ? source : new ArrayList<>(source.subList(0, max));
+    }
+
+    private static Map<String, String> truncate(Map<String, String> source, int max) {
+        if (source.size() <= max) {
+            return source;
+        }
+        Map<String, String> limited = new LinkedHashMap<>();
+        source.entrySet().stream().limit(max).forEach(e -> limited.put(e.getKey(), e.getValue()));
+        limited.put("_truncated", "还有 " + (source.size() - max) + " 条跳过记录未展示");
+        return limited;
     }
 
     private Progress readProgress(String json) {

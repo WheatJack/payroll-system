@@ -1,6 +1,7 @@
 package com.insbean.payroll.period.dto;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /** 契约 components.schemas.Period。 */
 public record PeriodDTO(
@@ -11,6 +12,10 @@ public record PeriodDTO(
         Integer employeeCount,
         BigDecimal totalGross,
         BigDecimal totalNet,
-        BigDecimal hpd
+        BigDecimal hpd,
+        Long compiledBy,
+        Long lockedBy,
+        LocalDateTime lockedAt,
+        String unlockReason
 ) {
 }

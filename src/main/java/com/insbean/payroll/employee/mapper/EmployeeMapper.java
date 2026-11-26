@@ -29,11 +29,13 @@ public interface EmployeeMapper extends BaseMapper<EmpEmployeeEntity> {
      * 解锁重算历史期间时，人员表里的当前归属可能早就变了，直接读会把今天的公司写进历史。
      * 对还没有任职区间数据的老人员，退回用 emp_employee.company_id，避免一笔数据都没有时全员漏算。
      *
-     * <p>在职状态只过滤 status=1；离职人员只要离职日落在期间内，离职当月仍要发工资。
+     * <p>「是否在发薪范围」只由 hire_date / leave_date 决定，**不看 status**。
+     * 用 status=1 过滤会漏掉离职当月：HR 先把状态置成离职（2），leave_date 落在期间内，
+     * 结果这个人整月一分钱都发不出来。
      */
     @Select("""
             SELECT e.* FROM emp_employee e
-             WHERE e.deleted = 0 AND e.status = 1
+             WHERE e.deleted = 0
                AND e.hire_date <= #{periodEnd}
                AND (e.leave_date IS NULL OR e.leave_date >= #{periodStart})
                AND (

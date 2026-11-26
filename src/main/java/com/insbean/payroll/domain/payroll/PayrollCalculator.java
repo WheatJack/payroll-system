@@ -54,13 +54,13 @@ public class PayrollCalculator {
         return Period.between(hireDate, periodEnd).getYears();
     }
 
-    /** 返回 null 表示全月在岗，不做折算。 */
+    /** 返回 null 表示全月在岗，不做折算。分母取期间参数（hpd），缺省 21.75。 */
     private BigDecimal prorationFactor(EmployeePayContext ctx) {
         if (ctx.payableDays() == null) {
             return null;
         }
         return BigDecimal.valueOf(ctx.payableDays())
-                .divide(PayrollRules.MONTHLY_PAYABLE_DAYS, PayrollRules.CALC_SCALE, RoundingMode.HALF_UP);
+                .divide(ctx.payableDaysDivisor(), PayrollRules.CALC_SCALE, RoundingMode.HALF_UP);
     }
 
     private PayItemResult item(EmployeePayContext ctx, String code, BigDecimal raw,

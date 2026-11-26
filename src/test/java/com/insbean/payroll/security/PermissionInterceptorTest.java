@@ -166,6 +166,11 @@ class PermissionInterceptorTest {
         }
 
         @Override
+        public Long findDeptId(Long id) {
+            return 1L;
+        }
+
+        @Override
         public void touchLogin(Long id) {
         }
     }

@@ -26,6 +26,9 @@ class CompProfileServiceTest extends AbstractDbTest {
     @Autowired
     private EmployeeService employeeService;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     private Long empId;
 
     @BeforeEach
@@ -122,6 +125,62 @@ class CompProfileServiceTest extends AbstractDbTest {
         CompProfileDTO dto = service.effectiveAt(empId, LocalDate.of(2026, 1, 1));
 
         assertThat(dto.baseSalary().toPlainString()).isEqualTo("8000.00");
+    }
+
+    @Test
+    void 同日重新保存作废旧段而不就地改金额() {
+        Long oldId = service.timeline(empId).get(0).id();
+
+        service.save(req(empId, LocalDate.of(2025, 7, 1), "8600", "更正"));
+
+        assertThat(service.timeline(empId)).hasSize(1);
+        // 旧行原值保留、只是被逻辑删除；不是被就地 UPDATE
+        assertThat(jdbc.queryForObject(
+                "SELECT base_salary FROM emp_comp_profile WHERE id = ?", BigDecimal.class, oldId))
+                .isEqualByComparingTo("8000");
+        assertThat(jdbc.queryForObject(
+                "SELECT deleted FROM emp_comp_profile WHERE id = ?", Integer.class, oldId))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void 修改薪酬默认从次月一日起效而不是追溯() {
+        Long id = service.timeline(empId).get(0).id();
+
+        CompProfileDTO updated = service.update(id,
+                new CompProfileSaveReq(null, null, null, new BigDecimal("9500"), "年度调薪", null));
+
+        assertThat(updated.effectiveFrom()).isEqualTo(CompProfileService.nextMonthFirstDay());
+        // 今天仍按旧档案发放，调薪不追溯
+        assertThat(service.effectiveAt(empId, LocalDate.now()).baseSalary()).isEqualByComparingTo("8000");
+    }
+
+    @Test
+    void 修改时未传items表示不改固定津贴() {
+        service.save(new CompProfileSaveReq(null, empId, LocalDate.of(2025, 7, 1),
+                new BigDecimal("8000"), "定薪",
+                List.of(new CompProfileItemDTO("POST_ALLOW", new BigDecimal("500")))));
+        Long id = service.timeline(empId).get(0).id();
+
+        CompProfileDTO updated = service.update(id,
+                new CompProfileSaveReq(null, null, null, new BigDecimal("9500"), "调薪", null));
+
+        // items=null 是"不改"，不能把固定津贴清空
+        assertThat(updated.items()).extracting(CompProfileItemDTO::itemCode).containsExactly("POST_ALLOW");
+        assertThat(updated.items().get(0).amount()).isEqualByComparingTo("500");
+    }
+
+    @Test
+    void 显式传空items才表示清空固定津贴() {
+        service.save(new CompProfileSaveReq(null, empId, LocalDate.of(2025, 7, 1),
+                new BigDecimal("8000"), "定薪",
+                List.of(new CompProfileItemDTO("POST_ALLOW", new BigDecimal("500")))));
+        Long id = service.timeline(empId).get(0).id();
+
+        CompProfileDTO updated = service.update(id,
+                new CompProfileSaveReq(null, null, null, new BigDecimal("9500"), "调薪", List.of()));
+
+        assertThat(updated.items()).isEmpty();
     }
 
     private static CompProfileSaveReq req(Long employeeId, LocalDate from, String salary, String reason) {

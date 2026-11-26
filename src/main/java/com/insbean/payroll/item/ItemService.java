@@ -10,6 +10,7 @@ import com.insbean.payroll.item.dto.PayItemCreateReq;
 import com.insbean.payroll.item.dto.PayItemDefDTO;
 import com.insbean.payroll.item.dto.PayItemUpdateReq;
 import com.insbean.payroll.item.mapper.PayItemMapper;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,9 +26,11 @@ public class ItemService {
     public static final long GLOBAL_COMPANY = 0L;
 
     private final PayItemMapper itemMapper;
+    private final DataScopeEnforcer dataScope;
 
-    public ItemService(PayItemMapper itemMapper) {
+    public ItemService(PayItemMapper itemMapper, DataScopeEnforcer dataScope) {
         this.itemMapper = itemMapper;
+        this.dataScope = dataScope;
     }
 
     /** 合并集团通用科目与本主体专属科目，仅启用项，按 sortNo 升序。 */
@@ -69,6 +72,7 @@ public class ItemService {
     public PayItemDefDTO create(PayItemCreateReq req, Long defaultCompanyId) {
         PayItemEntity entity = new PayItemEntity();
         entity.setCompanyId(req.companyId() != null ? req.companyId() : defaultCompanyId);
+        dataScope.assertCompanyVisible(entity.getCompanyId());
         entity.setItemCode(req.itemCode());
         entity.setItemName(req.itemName());
         entity.setCategory(req.category());
@@ -95,6 +99,8 @@ public class ItemService {
         if (entity == null) {
             throw new BizException(404, "工资项不存在");
         }
+        // 科目字典也按主体隔离：不能通过猜 id 改别家主体的专属科目
+        dataScope.assertCompanyVisible(entity.getCompanyId());
         if (req.category() != null && !req.category().equals(entity.getCategory())) {
             requireUnused(entity.getItemCode(), "类别");
             entity.setCategory(req.category());

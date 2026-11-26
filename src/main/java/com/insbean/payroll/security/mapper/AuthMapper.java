@@ -10,18 +10,22 @@ import java.util.List;
 public interface AuthMapper {
 
     @Select("""
-            SELECT id, company_id, username, password_hash, real_name, employee_id, status
+            SELECT id, company_id, username, password_hash, real_name, employee_id, dept_id, status
               FROM sys_user
              WHERE username = #{username} AND deleted = 0
             """)
     AuthUserRow findByUsername(@Param("username") String username);
 
     @Select("""
-            SELECT id, company_id, username, real_name, employee_id, status
+            SELECT id, company_id, username, real_name, employee_id, dept_id, status
               FROM sys_user
              WHERE id = #{id} AND deleted = 0
             """)
     AuthUserRow findById(@Param("id") Long id);
+
+    /** 数据范围 DEPT / DEPT_SUB 需要用到用户所属部门。 */
+    @Select("SELECT dept_id FROM sys_user WHERE id = #{id} AND deleted = 0")
+    Long findDeptId(@Param("id") Long id);
 
     /** 用户通过角色拿到的全部权限点。 */
     @Select("""

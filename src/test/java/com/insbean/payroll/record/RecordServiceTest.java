@@ -193,6 +193,42 @@ class RecordServiceTest extends AbstractDbTest {
                 .isInstanceOf(BizException.class);
     }
 
+    @Test
+    void 四位小数科目不会让整批保存失败() {
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction, data_type,
+                                      precision_scale, include_in_gross, editable, importable, sort_no, status)
+                VALUES (0, 'HOURLY_ADJ', '小时调整', 'VARIABLE', 1, 'AMOUNT', 4, 1, 1, 1, 60, 1)
+                """);
+
+        recordService.applyChangeset(periodId, oneChange(recordId, 0, Map.of("HOURLY_ADJ", "1.2345")));
+
+        GridRow row = recordService.grid(periodId).rows().get(0);
+        assertThat(row.items().get("HOURLY_ADJ")).isEqualTo("1.2345");
+        // 8600.00 + 1.2345 = 8601.2345，不能被强行抹成两位小数
+        assertThat(row.grossAmount()).isEqualTo("8601.2345");
+    }
+
+    @Test
+    void 停用科目仍然出现在行里以保证合计对得上() {
+        recordService.applyChangeset(periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "100.00")));
+        jdbc.update("UPDATE pay_item SET status = 0 WHERE item_code = 'PERF_BONUS'");
+
+        GridResponse grid = recordService.grid(periodId);
+
+        assertThat(grid.columns()).extracting(GridColumn::itemCode).contains("PERF_BONUS");
+        assertThat(grid.columns()).filteredOn(c -> "PERF_BONUS".equals(c.itemCode())).singleElement()
+                .satisfies(c -> assertThat(c.editable()).isFalse());
+        assertThat(grid.rows().get(0).grossAmount()).isEqualTo("8700.00");
+    }
+
+    @Test
+    void 保存后期间合计被同步刷新() {
+        recordService.applyChangeset(periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "2000.00")));
+
+        assertThat(periodService.get(periodId).totalGross()).isEqualByComparingTo("10600.00");
+    }
+
     // ------------------------------------------------------------------
 
     private static BigDecimal sumByDirection(GridRow row, Map<String, Integer> dir, int direction) {
