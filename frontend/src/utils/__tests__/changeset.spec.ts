@@ -5,6 +5,13 @@ import { beforeEach, describe, expect, test } from 'vitest'
 import { buildChangeset } from '../changeset'
 import { useGridStore } from '@/stores/grid'
 
+const CHANGESET_FIXTURE = JSON.parse(
+  readFileSync(resolve(process.cwd(), 'src/api/mock/fixtures/changeset-request.json'), 'utf-8'),
+)
+const CHANGESET_FROZEN_EXAMPLE = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../docs/api/examples/changeset-request.json'), 'utf-8'),
+)
+
 describe('buildChangeset 只提交改动', () => {
   test('未修改的单元格不进入 changeset', () => {
     expect(buildChangeset({ a: '100.00' }, { a: '100.00' }).changes).toHaveLength(0)
@@ -28,11 +35,88 @@ describe('buildChangeset 只提交改动', () => {
   })
 
   test('结构与冻结契约示例 changeset-request.json 完全一致', () => {
-    const example = JSON.parse(
-      readFileSync(resolve(process.cwd(), '../docs/api/examples/changeset-request.json'), 'utf-8'),
-    )
-    const built = buildChangeset({}, { PERF_BONUS: '2000.00' }, 0, '101')
-    expect(built).toEqual(example)
+    expect(buildChangeset({}, { PERF_BONUS: '2000.00' }, 0, '101')).toEqual(CHANGESET_FIXTURE)
+  })
+
+  test('前端 fixture 与 docs/api/examples 的冻结示例保持一致（防漂移）', () => {
+    // 仅测试期读取 docs（生产/开发构建不依赖 frontend 目录之外的文件）
+    expect(CHANGESET_FIXTURE).toEqual(CHANGESET_FROZEN_EXAMPLE)
+  })
+})
+
+describe('grid store 按列精度舍入（P0：不能一律截断到 2 位）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  function precisionGrid(scale: number) {
+    return {
+      period: { id: '3', periodYm: '2026-11', status: 'EDITING' as const },
+      columns: [
+        {
+          itemCode: 'PRECISE',
+          itemName: '高精度科目',
+          category: 'VARIABLE' as const,
+          direction: 1 as const,
+          scale,
+          editable: true,
+        },
+      ],
+      rows: [
+        {
+          recordId: '201',
+          version: 0,
+          employeeId: '1',
+          empNo: 'E001',
+          empName: '张三',
+          deptId: '1',
+          deptName: '北京研发部',
+          employeeType: 'REGULAR' as const,
+          jobLevel: 'P6',
+          seniorityYears: '6.00',
+          grossAmount: '0.00',
+          deductionAmount: '0.00',
+          netAmount: '0.00',
+          items: { PRECISE: '0.0000' },
+        },
+      ],
+      total: 1,
+    }
+  }
+
+  test('scale=4 的列保留 1.2345，提交 changeset 也不截断', () => {
+    const store = useGridStore()
+    store.load(precisionGrid(4))
+    store.edit('201', 'PRECISE', '1.2345')
+    expect(store.valueOf('201', 'PRECISE')).toBe('1.2345')
+    expect(store.buildRequest().changes[0].items[0].amount).toBe('1.2345')
+  })
+
+  test('scale=3 的列把 1.2345 按 HALF_UP 舍入为 1.235（而不是 1.23）', () => {
+    const store = useGridStore()
+    store.load(precisionGrid(3))
+    store.edit('201', 'PRECISE', '1.2345')
+    expect(store.valueOf('201', 'PRECISE')).toBe('1.235')
+  })
+
+  test('scale=2 的列仍把 1.2345 舍入为 1.23', () => {
+    const store = useGridStore()
+    store.load(precisionGrid(2))
+    store.edit('201', 'PRECISE', '1.2345')
+    expect(store.valueOf('201', 'PRECISE')).toBe('1.23')
+  })
+
+  test('显式传入 scale 时以传入值为准', () => {
+    const store = useGridStore()
+    store.load(precisionGrid(2))
+    store.edit('201', 'PRECISE', '1.2345', 4)
+    expect(store.valueOf('201', 'PRECISE')).toBe('1.2345')
+  })
+
+  test('未加载列时退回 2 位，不抛错', () => {
+    const store = useGridStore()
+    store.edit('999', 'UNKNOWN', '1.2345')
+    expect(store.valueOf('999', 'UNKNOWN')).toBe('1.23')
   })
 })
 

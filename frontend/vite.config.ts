@@ -11,10 +11,6 @@ export default defineConfig({
   },
   server: {
     port: 5174,
-    // docs/api/examples 位于 frontend/ 之外，mock 通过 ?raw 直接复用冻结契约的示例响应
-    fs: {
-      allow: [fileURLToPath(new URL('..', import.meta.url))],
-    },
     proxy: {
       '/api': {
         target: 'http://localhost:8080',

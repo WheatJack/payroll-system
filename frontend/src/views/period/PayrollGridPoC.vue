@@ -13,7 +13,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import exampleRaw from '../../../../docs/api/examples/grid-response.json?raw'
+import exampleRaw from '@/api/mock/fixtures/grid-response.json?raw'
 import type { GridColumn, GridResponse } from '@/api/models'
 import MoneyInput from '@/components/MoneyInput.vue'
 import { add, coerce, format, round, sub } from '@/utils/money'

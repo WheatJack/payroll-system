@@ -4,7 +4,7 @@
  * 契约响应示例直接复用 `docs/api/examples/*.json`（通过 ?raw 读取，不复制粘贴），
  * 其余端点按 `docs/api/openapi.yaml` 的 schema 构造最小可用数据。
  */
-import gridExampleRaw from '../../../../docs/api/examples/grid-response.json?raw'
+import gridExampleRaw from './fixtures/grid-response.json?raw'
 import type { Company, CompProfile, CurrentUser, Dept, Employee, GridResponse, PayItem, Period } from '@/api/models'
 
 interface Envelope<T> {

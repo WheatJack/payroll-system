@@ -20,7 +20,7 @@ import MoneyInput from '@/components/MoneyInput.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
-import { add, coerce, format, round, sub } from '@/utils/money'
+import { add, coerce, format, sub } from '@/utils/money'
 import { parseClipboardMatrix } from '@/utils/paste'
 
 const route = useRoute()
@@ -114,15 +114,12 @@ function onCellUpdate(row: GridRow, column: GridColumn, value: string) {
 }
 
 function onEditCommitted(row: GridRow, column: GridColumn) {
-  const amount = cellValue(row, column.itemCode)
-  const cleaned = coerce(amount)
-  if (cleaned === null) {
+  // 精度由 store 按该列的 scale 统一舍入（与后端 precision_scale 一致），这里只做合法性校验，
+  // 不在这里二次截断——否则 3/4 位小数的科目会被悄悄压成 2 位。
+  if (coerce(cellValue(row, column.itemCode)) === null) {
     ElMessage.warning(`${column.itemName} 不是合法金额，已回退`)
     store.revert(row.recordId, column.itemCode)
-    return
   }
-  const rounded = round(cleaned, column.scale)
-  if (rounded !== amount) store.edit(row.recordId, column.itemCode, rounded)
   void refreshTotals()
 }
 
@@ -257,7 +254,7 @@ function handlePaste(event: ClipboardEvent) {
         skipped += 1
         return
       }
-      store.edit(row.recordId, column.itemCode, round(amount, column.scale))
+      store.edit(row.recordId, column.itemCode, amount)
       applied += 1
     })
   })

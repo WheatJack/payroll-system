@@ -42,12 +42,17 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/period/PayrollGridView.vue'),
         meta: { title: '编制台', perm: 'payroll:record:view' },
       },
-      {
-        path: 'poc/grid',
-        name: 'payroll-grid-poc',
-        component: () => import('@/views/period/PayrollGridPoC.vue'),
-        meta: { title: '编制台 PoC', perm: 'payroll:record:view' },
-      },
+      // 开发专用：vxe-table PoC 只在 dev 注册，生产环境不存在该路由
+      ...(import.meta.env.DEV
+        ? [
+            {
+              path: 'poc/grid',
+              name: 'payroll-grid-poc',
+              component: () => import('@/views/period/PayrollGridPoC.vue'),
+              meta: { title: '编制台 PoC', perm: 'payroll:record:view' },
+            },
+          ]
+        : []),
     ],
   },
   {

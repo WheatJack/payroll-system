@@ -88,13 +88,32 @@ export const useGridStore = defineStore('grid', () => {
     return Object.keys(dirty.value[recordId] ?? {}).length
   }
 
-  /** 记录一次编辑；编辑回原值时自动从 dirty 中移除。 */
-  function edit(recordId: string, itemCode: string, amount: string): void {
+  /** 该工资项的列精度；未加载该列时退回 2 位，绝不硬编码 2。 */
+  function scaleOf(itemCode: string): number {
+    return columns.value.find((column) => column.itemCode === itemCode)?.scale ?? 2
+  }
+
+  /**
+   * 记录一次编辑；按**该列的 scale** 做一次 HALF_UP 舍入（与后端 precision_scale 一致），
+   * 编辑回原值时自动从 dirty 中移除。
+   *
+   * @param scale 显式指定精度（一般不需要，默认取 columns 里的 scale）
+   */
+  function edit(recordId: string, itemCode: string, amount: string, scale?: number): void {
+    const precision = scale ?? scaleOf(itemCode)
+    let normalized: string
+    try {
+      normalized = round(amount, precision)
+    } catch {
+      // 非法金额不写进 dirty（由调用方提示），避免污染 changeset
+      return
+    }
+
     const nextRow: Record<string, string> = { ...(dirty.value[recordId] ?? {}) }
-    if (sameAmount(originalValue(recordId, itemCode), amount)) {
+    if (sameAmount(originalValue(recordId, itemCode), normalized)) {
       delete nextRow[itemCode]
     } else {
-      nextRow[itemCode] = round(amount, 2)
+      nextRow[itemCode] = normalized
     }
     const nextAll: DirtyMap = { ...dirty.value }
     if (Object.keys(nextRow).length === 0) {
@@ -218,6 +237,7 @@ export const useGridStore = defineStore('grid', () => {
     valueOf,
     isDirty,
     rowDirtyCount,
+    scaleOf,
     edit,
     revert,
     revertAll,
