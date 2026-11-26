@@ -59,3 +59,38 @@ export type ChangesetRequest = S['ChangesetRequest']
 export type ChangesetResult = S['ChangesetResult']
 export type ConflictItem = S['ConflictItem']
 export type ChangesetConflicts = S['ChangesetConflicts']
+
+// ---------------------------------------------------------------
+// v1.1：报表 / 导入 / 系统管理
+// ---------------------------------------------------------------
+export type PermissionCode = S['PermissionCode']
+export type ReportType = S['ReportType']
+export type ReportFormat = S['ReportFormat']
+export type ReportGroupBy = S['ReportGroupBy']
+export type ImportBizType = S['ImportBizType']
+export type ImportMode = S['ImportMode']
+export type ImportBatchStatus = S['ImportBatchStatus']
+
+export type MonthlyReportRow = S['MonthlyReportRow']
+export type AnnualReportRow = S['AnnualReportRow']
+export type ReportExportParams = S['ReportExportParams']
+export type ExportRequest = S['ExportRequest']
+
+export type ImportError = S['ImportError']
+export type ImportValidateResult = S['ImportValidateResult']
+export type ImportCommitResult = S['ImportCommitResult']
+
+export type PermissionItem = S['PermissionItem']
+export type User = S['User']
+export type UserPage = S['UserPage']
+export type UserCreateRequest = S['UserCreateRequest']
+export type UserUpdateRequest = S['UserUpdateRequest']
+export type ResetPasswordRequest = S['ResetPasswordRequest']
+export type Role = S['Role']
+export type RoleCreateRequest = S['RoleCreateRequest']
+export type RoleUpdateRequest = S['RoleUpdateRequest']
+export type RoleGrantRequest = S['RoleGrantRequest']
+export type CompanyCreateRequest = S['CompanyCreateRequest']
+export type CompanyUpdateRequest = S['CompanyUpdateRequest']
+export type DeptCreateRequest = S['DeptCreateRequest']
+export type DeptUpdateRequest = S['DeptUpdateRequest']

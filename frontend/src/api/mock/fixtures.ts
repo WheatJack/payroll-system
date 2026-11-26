@@ -62,6 +62,7 @@ export const EMPLOYEES: Employee[] = [
     jobLevel: 'P6',
     positionName: '高级工程师',
     deptId: '1',
+    deptName: '北京研发部',
     hireDate: '2020-03-01',
     workStartDate: '2019-07-01',
     leaveDate: null,
@@ -81,6 +82,7 @@ export const EMPLOYEES: Employee[] = [
     jobLevel: 'P5',
     positionName: '财务专员',
     deptId: '2',
+    deptName: '北京财务部',
     hireDate: '2026-09-01',
     workStartDate: '2026-09-01',
     leaveDate: null,
@@ -100,6 +102,7 @@ export const EMPLOYEES: Employee[] = [
     jobLevel: null,
     positionName: '实习生',
     deptId: '3',
+    deptName: '研发一组',
     hireDate: '2026-07-01',
     workStartDate: '2026-07-01',
     leaveDate: null,
@@ -194,3 +197,22 @@ export const COMP_PROFILES: CompProfile[] = [
 export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
+
+/* ------------------------- 报表（M1.5） ------------------------- */
+
+export const MONTHLY_REPORT_ROWS = [
+  { companyId: '1', periodYm: '2026-11', deptId: '1', deptName: '北京研发部', employeeCount: 1, grossAmount: '8600.00', deductionAmount: '2150.00', netAmount: '6450.00' },
+  { companyId: '1', periodYm: '2026-11', deptId: '2', deptName: '北京财务部', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+  { companyId: '1', periodYm: '2026-10', deptId: '1', deptName: '北京研发部', employeeCount: 1, grossAmount: '8500.00', deductionAmount: '2100.00', netAmount: '6400.00' },
+  { companyId: '1', periodYm: '2026-11', deptId: '3', deptName: '研发一组', employeeCount: 1, grossAmount: '3100.00', deductionAmount: '620.00', netAmount: '2480.00' },
+]
+
+export const ANNUAL_REPORT_ROWS = [
+  { year: '2026', groupBy: 'DEPT', deptId: '1', deptName: '北京研发部', employeeCount: 2, grossAmount: '17100.00', deductionAmount: '4250.00', netAmount: '12850.00' },
+  { year: '2026', groupBy: 'DEPT', deptId: '2', deptName: '北京财务部', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+]
+
+export const ANNUAL_REPORT_EMP_ROWS = [
+  { year: '2026', groupBy: 'EMP', employeeId: '1', empNo: 'E001', empName: '张三', employeeCount: 1, grossAmount: '8600.00', deductionAmount: '2150.00', netAmount: '6450.00' },
+  { year: '2026', groupBy: 'EMP', employeeId: '2', empNo: 'E002', empName: '李四', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+]

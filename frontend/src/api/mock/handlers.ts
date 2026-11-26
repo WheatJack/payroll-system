@@ -5,6 +5,7 @@ import type {
   CompProfile,
   Employee,
   EmployeePage,
+  ExportRequest,
   GridRow,
   PayItem,
   Period,
@@ -13,6 +14,8 @@ import type {
 } from '@/api/models'
 import { add, round, sub } from '@/utils/money'
 import {
+  ANNUAL_REPORT_EMP_ROWS,
+  ANNUAL_REPORT_ROWS,
   COMPANIES,
   COMP_PROFILES,
   DEMO_TOKEN,
@@ -21,6 +24,7 @@ import {
   EMPLOYEES,
   EMPLOYEE_ID_NOS,
   GRID_EXAMPLE,
+  MONTHLY_REPORT_ROWS,
   PAY_ITEMS,
   PERIODS,
   clone,
@@ -36,6 +40,7 @@ import {
  */
 
 const API = '/api/v1'
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 const ok = (data: unknown) => HttpResponse.json({ code: 0, msg: 'ok', data })
 const fail = (status: number, msg: string, data: unknown = null) =>
@@ -197,6 +202,7 @@ export const handlers = [
       jobLevel: body.jobLevel ? String(body.jobLevel) : null,
       positionName: body.positionName ? String(body.positionName) : null,
       deptId: String(body.deptId),
+      deptName: DEPTS.find((dept) => dept.id === String(body.deptId))?.deptName ?? '',
       hireDate: String(body.hireDate),
       workStartDate: body.workStartDate ? String(body.workStartDate) : null,
       leaveDate: body.leaveDate ? String(body.leaveDate) : null,
@@ -242,7 +248,12 @@ export const handlers = [
       ...(body.employeeType !== undefined ? { employeeType: body.employeeType as Employee['employeeType'] } : {}),
       ...(body.jobLevel !== undefined ? { jobLevel: body.jobLevel ? String(body.jobLevel) : null } : {}),
       ...(body.positionName !== undefined ? { positionName: body.positionName ? String(body.positionName) : null } : {}),
-      ...(body.deptId !== undefined ? { deptId: String(body.deptId) } : {}),
+      ...(body.deptId !== undefined
+        ? {
+            deptId: String(body.deptId),
+            deptName: DEPTS.find((dept) => dept.id === String(body.deptId))?.deptName ?? '',
+          }
+        : {}),
       ...(body.hireDate !== undefined ? { hireDate: String(body.hireDate) } : {}),
       ...(body.workStartDate !== undefined ? { workStartDate: body.workStartDate ? String(body.workStartDate) : null } : {}),
       ...(body.leaveDate !== undefined ? { leaveDate: body.leaveDate ? String(body.leaveDate) : null } : {}),
@@ -538,5 +549,64 @@ export const handlers = [
 
     const result: ChangesetResult = { updated: updatedRows.length, rows: updatedRows }
     return ok(result)
+  }),
+
+  /* ------------------------------ 报表 ------------------------------ */
+
+  http.get(`${API}/reports/monthly`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const search = new URL(request.url).searchParams
+    const periodYm = search.get('periodYm')
+    if (!periodYm) return fail(400, 'periodYm 不能为空')
+    const companyId = search.get('companyId')
+    const deptId = search.get('deptId')
+    const rows = MONTHLY_REPORT_ROWS.filter((row) => row.periodYm === periodYm)
+      .filter((row) => (companyId ? row.companyId === companyId : true))
+      .filter((row) => (deptId ? row.deptId === deptId : true))
+    return ok(rows)
+  }),
+
+  http.get(`${API}/reports/annual`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const search = new URL(request.url).searchParams
+    const year = search.get('year')
+    const groupBy = search.get('groupBy')
+    const companyId = search.get('companyId')
+    if (!year) return fail(400, 'year 不能为空')
+    if (!groupBy) return fail(400, 'groupBy 不能为空')
+    if (groupBy === 'DEPT' && DEMO_USER.dataScope === 'ALL' && !companyId) {
+      return fail(400, '集团范围按部门汇总必须提供 companyId')
+    }
+    const rows = groupBy === 'EMP' ? ANNUAL_REPORT_EMP_ROWS : ANNUAL_REPORT_ROWS
+    return ok(rows.filter((row) => row.year === year))
+  }),
+
+  http.post(`${API}/reports/export`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!DEMO_USER.permissions.includes('payroll:export')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as ExportRequest
+    if (!body?.reportType || !body.params || !body.format) {
+      return fail(400, '缺少 reportType / params / format')
+    }
+    const params = body.params
+    if (body.reportType === 'ANNUAL') {
+      if (!params.year || !params.groupBy) return fail(400, '年度报表必须提供 params.year 与 params.groupBy')
+      if (params.groupBy === 'DEPT' && DEMO_USER.dataScope === 'ALL' && !params.companyId) {
+        return fail(400, '集团范围按部门导出必须提供 params.companyId')
+      }
+    } else if (!params.periodYm) {
+      return fail(400, '该报表类型必须提供 params.periodYm')
+    }
+
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+    const filename = `${body.reportType.toLowerCase()}-${params.periodYm ?? params.year}-${stamp}.xlsx`
+    const blob = new Blob([`PK\u0003\u0004 mock export ${body.reportType}`], { type: XLSX_MIME })
+    return new HttpResponse(blob, {
+      status: 200,
+      headers: { 'Content-Type': XLSX_MIME, 'Content-Disposition': `attachment; filename="${filename}"` },
+    })
   }),
 ]

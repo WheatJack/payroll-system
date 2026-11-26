@@ -65,6 +65,21 @@ function createApiError(code: number, message: string, data: unknown, httpStatus
   return error
 }
 
+/** 供二进制下载等特殊路径复用：把响应包/HTTP 状态转成统一的 ApiError。 */
+export function buildApiError(
+  code: number,
+  serverMessage: string | undefined,
+  data: unknown,
+  httpStatus?: number,
+): ApiError {
+  return createApiError(code, messageFor(code, serverMessage, `请求失败（${code}）`), data, httpStatus)
+}
+
+/** 供二进制下载路径复用：401 时同样清 token + 跳登录。 */
+export function notifyUnauthorized(): void {
+  handleUnauthorized()
+}
+
 let unauthorizedHandler: (() => void) | null = null
 
 /** 由 main.ts 注册：清空登录态并跳转登录页。 */
@@ -81,6 +96,23 @@ export const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
+})
+
+/**
+ * 原始实例：**不解析**统一响应包，保留 `response.headers` 与二进制 body。
+ * 仅用于 `responseType: 'blob'` 的下载端点（导出、模板、错误报告）。
+ */
+export const rawHttp = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
+  timeout: 60_000,
+})
+
+rawHttp.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 http.interceptors.request.use((config) => {

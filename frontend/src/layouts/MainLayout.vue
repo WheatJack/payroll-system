@@ -13,6 +13,8 @@ const menus = computed(() =>
     { path: '/employees', title: '人员管理', perm: 'payroll:record:view', icon: 'User' },
     { path: '/items', title: '工资项', perm: 'payroll:record:view', icon: 'List' },
     { path: '/periods', title: '工资期间', perm: 'payroll:record:view', icon: 'Calendar' },
+    { path: '/reports/monthly', title: '月度报表', perm: 'payroll:record:view', icon: 'DataLine' },
+    { path: '/reports/annual', title: '年度报表', perm: 'payroll:record:view', icon: 'TrendCharts' },
   ].filter((menu) => auth.has(menu.perm)),
 )
 
@@ -20,7 +22,6 @@ const activeMenu = computed(() => {
   if (route.path.startsWith('/periods')) return '/periods'
   return route.path
 })
-
 async function logout() {
   try {
     await ElMessageBox.confirm('退出后需要重新登录，确认退出？', '退出登录', {

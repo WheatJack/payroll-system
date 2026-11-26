@@ -57,7 +57,11 @@ export interface paths {
          */
         get: operations["listCompanies"];
         put?: never;
-        post?: never;
+        /**
+         * 新增法人主体
+         * @description 需要 `sys:company:edit`。`companyCode` 全局唯一，重复返回 409。
+         */
+        post: operations["createCompany"];
         delete?: never;
         options?: never;
         head?: never;
@@ -74,10 +78,17 @@ export interface paths {
         /**
          * 部门树（扁平）
          * @description 返回指定主体下的扁平部门列表，`ancestors` 为祖先路径，前端自行组装树。
+         *     权限：已认证用户即可读（部门树是人员、期间筛选与编制台的公共基础数据，
+         *     不额外要求系统管理权限点）。
          */
         get: operations["listDepts"];
         put?: never;
-        post?: never;
+        /**
+         * 新增部门
+         * @description 需要 `sys:dept:edit`。`deptCode` 在同一主体内唯一，重复返回 409。
+         *     `ancestors` 由后端根据 `parentId` 生成，不接受客户端提交。
+         */
+        post: operations["createDept"];
         delete?: never;
         options?: never;
         head?: never;
@@ -391,8 +402,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 下载导入模板（M2）
-         * @description 列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
+         * 下载导入模板
+         * @description 需要 `payroll:import:submit`。列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
          */
         get: operations["downloadImportTemplate"];
         put?: never;
@@ -413,10 +424,35 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 上传并预校验（M2）
-         * @description 只预校验不落库；返回批次号、成功/失败行数与错误明细。
+         * 上传并预校验
+         * @description 需要 `payroll:import:submit`。**不写入核算数据**
+         *     （`pay_record` / `pay_record_item`）；但持久化 `pay_import_batch`、
+         *     `pay_import_error` 与原始文件，保证刷新后可回捞 batchId 与错误明细、
+         *     也可按批次重放。提交时按批次重放并**重新校验**。
+         *     返回批次号、成功/失败行数与错误明细。
          */
         post: operations["validateImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/{batchId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询导入批次
+         * @description 需要 `payroll:import:submit`。刷新页面后回捞批次状态与错误明细；
+         *     `status=VALIDATING` 时可轮询本接口获取进度。
+         */
+        get: operations["getImportBatch"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -433,8 +469,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 确认提交导入（M2）
-         * @description 事务内 upsert 并生成核算明细。已提交过的文件 hash 会被拒绝（409）。
+         * 确认提交导入
+         * @description 需要 `payroll:import:submit`。事务内 upsert 并生成核算明细。
+         *     已提交过的文件 hash 会被拒绝（409）。
+         *     **`failRows > 0` 时禁止提交**：返回 409 且 `data.failRows` 为失败行数，
+         *     必须重新校验到 0 失败后才可提交（不能只靠前端置灰）。
          */
         post: operations["commitImport"];
         delete?: never;
@@ -451,8 +490,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 下载错误报告（M2）
-         * @description 返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
+         * 下载错误报告
+         * @description 需要 `payroll:export`（错误报告含工资金额，与导出同级）。
+         *     返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
          */
         get: operations["downloadImportErrors"];
         put?: never;
@@ -471,8 +511,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 月度汇总（M2）
-         * @description 按部门汇总的月度数据；仅统计已锁定及以后期间。
+         * 月度汇总
+         * @description 需要 `payroll:record:view`。按部门汇总的月度数据；仅统计 `LOCKED` 与
+         *     `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
+         *     `COMPANY`/`ALL`）过滤。
          */
         get: operations["getMonthlyReport"];
         put?: never;
@@ -491,11 +533,279 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 年度汇总（M2）
-         * @description 按人或按部门汇总的年度数据；仅统计 `LOCKED` 及以后期间。
+         * 年度汇总
+         * @description 需要 `payroll:record:view`。按人或按部门汇总的年度数据；仅统计 `LOCKED` 与
+         *     `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
+         *     `COMPANY`/`ALL`）过滤。
+         *     `groupBy=DEPT` 且操作者数据范围含多个主体时 `companyId` 必填，缺则 400。
          */
         get: operations["getAnnualReport"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 导出汇总报表
+         * @description 导出报表为 xlsx 文件，`reportType` 决定内容与必填参数：
+         *     - `MONTHLY`：月度汇总，`params.periodYm` 必填；
+         *     - `ANNUAL`：年度汇总，`params.year` + `params.groupBy` 必填；
+         *       `groupBy=DEPT` 且操作者数据范围含多个主体时 `params.companyId` 必填
+         *       （否则会把不同主体的同名部门合并加总），缺参返回 400；
+         *     - `PERIOD_SHEET`：期间完整工资表（含全部工资项列），`params.periodYm` 必填，
+         *       `params.deptId` 可选；
+         *     - `PAYSLIP`：员工工资条（一批人或一个人），`params.periodYm` 必填，
+         *       `params.employeeIds` 可选（不传时按数据范围导出可见人员）。
+         *       **工资条只含姓名、工号、部门、工资项与合计，不含证件号、手机号、银行卡号**
+         *       （最小必要原则）。
+         *     缺少对应类型的必填参数一律返回 400。
+         *
+         *     需要 `payroll:export` 权限；导出成功写审计日志（`pay_audit_log`，
+         *     `action=EXPORT`，记录查询条件与导出行数）。
+         *     数据范围过滤与查询接口一致（`SELF` / `DEPT` / `DEPT_SUB` / `COMPANY` / `ALL`）。
+         *     金额列以**数值类型**写入，并设单元格数字格式 `#,##0.00`（保证 Excel 中可
+         *     直接 SUM）；证件号、银行卡号、工号以**文本格式**写入（这些长数字才会被
+         *     Excel 转成科学计数法）。
+         *
+         *     **响应格式**：成功时 `200` 直接返回二进制 xlsx 流，**不使用统一响应包**；
+         *     文件名由 `Content-Disposition: attachment` 给出（含报表类型、期间与时间戳）。
+         *     失败时（`400`/`401`/`403`/`500`）**仍返回 JSON 统一响应包** `{code,msg,data}`，
+         *     `code` 与 HTTP 状态码一致。
+         *
+         *     **前端判据**：按 HTTP 状态码判断成功与否——`200` 即二进制流
+         *     （`Content-Type` 为 xlsx）；失败响应的 `Content-Type` 为 `application/json`，
+         *     按统一响应包解析错误。
+         */
+        post: operations["exportReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 用户分页查询
+         * @description 需要 `sys:user:view`。按用户名/姓名/主体/部门/状态筛选，密码永不返回。
+         */
+        get: operations["listUsers"];
+        put?: never;
+        /**
+         * 新增用户
+         * @description 需要 `sys:user:edit`。密码只在请求中出现一次，后端 BCrypt 存储，响应不回显。
+         *     `username` 全局唯一，重复返回 409；`employeeId` 已被其它账号关联时返回 409。
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改用户
+         * @description 需要 `sys:user:edit`。只提交需要修改的字段；`username` 不可修改。
+         *     不能停用自己（`status=0` 且 `id` 为当前用户）返回 409。
+         */
+        put: operations["updateUser"];
+        post?: never;
+        /**
+         * 删除用户
+         * @description 需要 `sys:user:edit`。逻辑删除（`deleted=1`），历史审计与工资记录保留；
+         *     不能删除自己（409）。删除账号不删除其关联的人员主数据。
+         */
+        delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 重置密码
+         * @description 需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效；
+         *     该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上由后端
+         *     新增 `sys_user.pwd_changed_at` 列，与 token 签发时间比对后判定失效。
+         *     新密码不会在响应中回显。
+         */
+        post: operations["resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 权限点目录
+         * @description 需要 `sys:role:view`。返回全部功能权限点及其名称与所属模块，
+         *     供角色授权页勾选，避免前端硬编码权限点列表。
+         */
+        get: operations["listPermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 角色列表
+         * @description 需要 `sys:role:view`。返回角色及其权限点（不分页）。
+         */
+        get: operations["listRoles"];
+        put?: never;
+        /**
+         * 新增角色
+         * @description 需要 `sys:role:edit`。`roleCode` 在同一主体内唯一，重复返回 409。
+         *     `dataScope` 不得宽于操作者自身；授予 `ALL` 需额外持有 `sys:role:grant:all`；
+         *     授予的权限点必须是操作者自身权限点的子集。越权返回 403。
+         */
+        post: operations["createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改角色
+         * @description 需要 `sys:role:edit`。只提交需要修改的字段；权限点用 `/roles/{id}/grants` 单独维护。
+         *     **防自我提权**：新 `dataScope` 不得宽于操作者当前数据范围；改为 `ALL` 需额外持有
+         *     `sys:role:grant:all`。越权尝试返回 403。
+         */
+        put: operations["updateRole"];
+        post?: never;
+        /**
+         * 删除角色
+         * @description 需要 `sys:role:edit`。逻辑删除（`deleted=1`），权限点与授予关系一并失效；
+         *     仍有用户关联该角色时返回 409，需先将用户改授其它角色。
+         */
+        delete: operations["deleteRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roles/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 设置角色权限点
+         * @description 需要 `sys:role:edit`。**全量替换**该角色的权限点集合（先删后插，事务内完成）；
+         *     传空数组即清空。权限点取值见 `PermissionCode`。
+         *     **防自我提权**：提交的权限点必须是操作者自身权限点的子集；包含
+         *     `payroll:export`、`payroll:sensitive:view`、`sys:role:grant:all` 等
+         *     操作者未持有的权限点即越权，返回 403。
+         */
+        put: operations["replaceRoleGrants"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/depts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改部门
+         * @description 需要 `sys:dept:edit`。可调整上级部门；`parentId` 不能指向自己或自己的下级（400），
+         *     `ancestors` 由后端按新层级重算并级联更新下级。
+         */
+        put: operations["updateDept"];
+        post?: never;
+        /**
+         * 删除部门
+         * @description 需要 `sys:dept:edit`。逻辑删除（`deleted=1`）；
+         *     存在下级部门或关联员工/用户时返回 409，需先迁移下级与关联数据。
+         */
+        delete: operations["deleteDept"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/companies/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改法人主体
+         * @description 需要 `sys:company:edit`。只提交需要修改的字段；`companyCode` 仍全局唯一。
+         */
+        put: operations["updateCompany"];
         post?: never;
         delete?: never;
         options?: never;
@@ -514,7 +824,7 @@ export interface components {
         Id: string;
         /**
          * Format: decimal
-         * @description 金额十进制字符串，禁止使用 JSON number；展示统一 2 位小数
+         * @description 金额十进制字符串，禁止使用 JSON number；展示保留两位小数，实际精度 DECIMAL(18,4)
          * @example 8600.00
          */
         Money: string;
@@ -524,6 +834,19 @@ export interface components {
          * @example 6.00
          */
         DecimalString: string;
+        /**
+         * @description 功能权限点。`sys:role:grant:all` 是唯一允许授予 `dataScope=ALL` 的权限点，
+         *     且授权者必须自身也持有该权限点。
+         *     - 核算：`payroll:record:view`、`payroll:record:edit`
+         *     - 期间：`payroll:period:lock`、`payroll:period:unlock`
+         *     - 导入导出：`payroll:import:submit`、`payroll:export`
+         *     - 敏感字段：`payroll:sensitive:view`
+         *     - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
+         *       `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`
+         * @example sys:user:view
+         * @enum {string}
+         */
+        PermissionCode: "payroll:record:view" | "payroll:record:edit" | "payroll:period:lock" | "payroll:period:unlock" | "payroll:import:submit" | "payroll:export" | "payroll:sensitive:view" | "sys:user:view" | "sys:user:edit" | "sys:role:view" | "sys:role:edit" | "sys:role:grant:all" | "sys:dept:edit" | "sys:company:edit";
         /**
          * Format: int32
          * @description 业务状态码。0=成功；400=参数校验失败；401=未认证；403=无权限；
@@ -556,7 +879,10 @@ export interface components {
          */
         PayItemCategory: "FIXED" | "VARIABLE" | "COMPUTED";
         /**
-         * @description 工资项方向：1 增加（收入），2 减少（扣款）
+         * @description 工资项方向：`1` 增加（收入），`2` 减少（扣款）。
+         *     明细金额（`items` 的值）恒为非负数，方向只由该字段表达；
+         *     汇总口径：`gross = Σ(direction=1)`，`deduction = Σ(direction=2)`，
+         *     `net = gross − deduction`。
          * @enum {integer}
          */
         PayDirection: 1 | 2;
@@ -595,6 +921,20 @@ export interface components {
          * @enum {string}
          */
         ReportGroupBy: "EMP" | "DEPT";
+        /**
+         * @description 报表类型：
+         *     - `MONTHLY` 月度汇总（按部门）
+         *     - `ANNUAL` 年度汇总（按人或按部门）
+         *     - `PERIOD_SHEET` 期间完整工资表（含全部工资项列）
+         *     - `PAYSLIP` 员工工资条（一批人或一个人）
+         * @enum {string}
+         */
+        ReportType: "MONTHLY" | "ANNUAL" | "PERIOD_SHEET" | "PAYSLIP";
+        /**
+         * @description 导出文件格式（当前仅 XLSX）
+         * @enum {string}
+         */
+        ReportFormat: "XLSX";
         LoginRequest: {
             username: string;
             /** Format: password */
@@ -675,6 +1015,8 @@ export interface components {
             jobLevel?: string | null;
             positionName?: string | null;
             deptId: components["schemas"]["Id"];
+            /** @description 部门名称，只读（后端按 deptId 关联返回），不接受写入 */
+            deptName: string;
             /**
              * Format: date
              * @example 2020-03-01
@@ -890,6 +1232,17 @@ export interface components {
             totalNet: components["schemas"]["Money"];
             /** @description 期间计薪天数参数，默认 21.75 */
             hpd: components["schemas"]["DecimalString"];
+            /** @description 最后编制人用户 ID（锁定内控：锁定人不能等于编制人） */
+            compiledBy?: string | null;
+            /** @description 锁定人用户 ID；未锁定为 null */
+            lockedBy?: string | null;
+            /**
+             * Format: date-time
+             * @description 锁定时间；未锁定为 null
+             */
+            lockedAt?: string | null;
+            /** @description 最近一次解锁原因；未解锁过为 null */
+            unlockReason?: string | null;
         };
         PeriodCreateRequest: {
             /** @description 缺省取当前用户所属主体 */
@@ -948,7 +1301,7 @@ export interface components {
             recordId: components["schemas"]["Id"];
             /**
              * Format: int32
-             * @description 乐观锁版本号，保存 changeset 时必须原样带回
+             * @description 乐观锁版本号，新建记录从 `0` 开始、每次保存 `+1`；保存 changeset 时必须原样带回
              * @example 0
              */
             version: number;
@@ -964,7 +1317,10 @@ export interface components {
             deductionAmount: components["schemas"]["Money"];
             netAmount: components["schemas"]["Money"];
             /**
-             * @description 键为 itemCode，值为字符串金额
+             * @description 键为 `itemCode`，值为字符串金额，且恒为非负数（方向由列定义的 `direction` 表达）。
+             *     该行有明细的工资项才会出现；键必然在 `columns[].itemCode` 之内。
+             *     汇总口径：`grossAmount = Σ(direction=1 的 items)`，
+             *     `deductionAmount = Σ(direction=2 的 items)`，`netAmount = grossAmount − deductionAmount`。
              * @example {
              *       "BASE_SALARY": "8000.00",
              *       "SENIORITY_PAY": "600.00"
@@ -974,6 +1330,12 @@ export interface components {
                 [key: string]: components["schemas"]["Money"];
             };
         };
+        /**
+         * @description `columns` 覆盖该主体**全部启用科目**（按 `sortNo` 排序），是本期间工资表的完整列集合；
+         *     `items` 的键必然在 `columns[].itemCode` 之内。
+         *     `docs/api/examples/grid-response.json` 是为篇幅截断的示例（只展示 2 列），
+         *     不代表真实响应只会返回 2 列——前端必须完全按 `columns` 动态渲染。
+         */
         GridResponse: {
             period: components["schemas"]["GridPeriod"];
             columns: components["schemas"]["GridColumn"][];
@@ -990,7 +1352,7 @@ export interface components {
             recordId: components["schemas"]["Id"];
             /**
              * Format: int32
-             * @description 该行当前版本号（来自 grid 响应）
+             * @description 该行当前版本号（来自 grid 响应；新建记录从 `0` 开始、每次保存 `+1`）
              */
             version: number;
             items: components["schemas"]["ChangesetItem"][];
@@ -1037,15 +1399,27 @@ export interface components {
             successRows: number;
             failRows: number;
         };
+        /**
+         * @description 仅统计 `LOCKED` 与 `ARCHIVED` 期间；按部门汇总。
+         *     `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+         *     因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
+         */
         MonthlyReportRow: {
             companyId: components["schemas"]["Id"];
             periodYm: string;
             deptId: components["schemas"]["Id"];
+            deptName?: string | null;
             employeeCount: number;
             grossAmount: components["schemas"]["Money"];
             deductionAmount: components["schemas"]["Money"];
             netAmount: components["schemas"]["Money"];
         };
+        /**
+         * @description 仅统计 `LOCKED` 与 `ARCHIVED` 期间；年度按**归属期间**归集，
+         *     13 薪与年终奖计入其归属月份所在年度。
+         *     `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+         *     因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
+         */
         AnnualReportRow: {
             /** @example 2026 */
             year: string;
@@ -1060,6 +1434,196 @@ export interface components {
             grossAmount: components["schemas"]["Money"];
             deductionAmount: components["schemas"]["Money"];
             netAmount: components["schemas"]["Money"];
+        };
+        /**
+         * @description 查询条件，按 `reportType` 取用不同字段：
+         *     - `MONTHLY`：`periodYm` 必填；
+         *     - `ANNUAL`：`year` + `groupBy` 必填；`groupBy=DEPT` 且操作者数据范围含多个
+         *       主体时 `companyId` 必填（否则会把不同主体的同名部门加总）；
+         *     - `PERIOD_SHEET`：`periodYm` 必填，`deptId` 可选（限定部门）；
+         *     - `PAYSLIP`：`periodYm` 必填，`employeeIds` 可选（一批人或一个人；
+         *       不传时按当前用户数据范围导出可见人员）。
+         *     缺少对应类型的必填参数返回 400。
+         *     全部报表仅统计 `LOCKED` 与 `ARCHIVED` 期间，并按当前用户的数据范围过滤。
+         */
+        ReportExportParams: {
+            /** @description MONTHLY / PERIOD_SHEET / PAYSLIP 必填，如 "2026-11" */
+            periodYm?: string;
+            /** @description ANNUAL 必填，如 "2026" */
+            year?: string;
+            groupBy?: components["schemas"]["ReportGroupBy"];
+            /** @description ANNUAL + groupBy=DEPT 且操作者范围含多主体时必填，缺则 400 */
+            companyId?: components["schemas"]["Id"];
+            deptId?: components["schemas"]["Id"];
+            /** @description PAYSLIP 可选；指定则只导出这些人，不传按数据范围导出可见人员 */
+            employeeIds?: components["schemas"]["Id"][];
+        };
+        ExportRequest: {
+            reportType: components["schemas"]["ReportType"];
+            params: components["schemas"]["ReportExportParams"];
+            format: components["schemas"]["ReportFormat"];
+        };
+        PermissionItem: {
+            code: components["schemas"]["PermissionCode"];
+            /** @example 查看核算 */
+            name: string;
+            /**
+             * @description 所属模块
+             * @enum {string}
+             */
+            module: "PAYROLL" | "SYS";
+        };
+        /** @description 系统用户。密码哈希永不返回；手机号只返回掩码。 */
+        User: {
+            id: components["schemas"]["Id"];
+            companyId: components["schemas"]["Id"];
+            username: string;
+            realName: string;
+            /** @description 关联人员 ID；未关联人员时为 null */
+            employeeId?: string | null;
+            deptId?: string | null;
+            /** @example 138****8000 */
+            mobileMask?: string | null;
+            /**
+             * @description 1启用 0停用
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** Format: date-time */
+            lastLoginAt?: string | null;
+            roleIds: components["schemas"]["Id"][];
+            /** @description 该用户经全部角色合并后的权限点（只读） */
+            permissions: components["schemas"]["PermissionCode"][];
+            dataScope: components["schemas"]["DataScope"];
+        };
+        UserPage: {
+            records: components["schemas"]["User"][];
+            total: number;
+            current: number;
+            size: number;
+        };
+        UserCreateRequest: {
+            companyId: components["schemas"]["Id"];
+            username: string;
+            /**
+             * Format: password
+             * @description 明文只在请求中出现一次，后端 BCrypt 存储
+             */
+            password: string;
+            realName: string;
+            employeeId?: string | null;
+            deptId?: string | null;
+            /**
+             * @default 1
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** @default [] */
+            roleIds: components["schemas"]["Id"][];
+        };
+        /** @description 只提交需要修改的字段；`username` 与 `companyId` 不可修改。 */
+        UserUpdateRequest: {
+            realName?: string;
+            employeeId?: string | null;
+            deptId?: string | null;
+            /** @enum {integer} */
+            status?: 0 | 1;
+            /** @description 全量替换用户角色 */
+            roleIds?: components["schemas"]["Id"][];
+        };
+        ResetPasswordRequest: {
+            /**
+             * Format: password
+             * @description 重置后旧密码立即失效；该用户下次请求需重新登录（比对 `pwd_changed_at`）
+             */
+            newPassword: string;
+        };
+        Role: {
+            id: components["schemas"]["Id"];
+            companyId: components["schemas"]["Id"];
+            roleCode: string;
+            roleName: string;
+            dataScope: components["schemas"]["DataScope"];
+            remark?: string | null;
+            /**
+             * @description 1启用 0停用
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            permissions: components["schemas"]["PermissionCode"][];
+        };
+        RoleCreateRequest: {
+            companyId: components["schemas"]["Id"];
+            roleCode: string;
+            roleName: string;
+            dataScope: components["schemas"]["DataScope"];
+            remark?: string | null;
+            /**
+             * @default 1
+             * @enum {integer}
+             */
+            status: 0 | 1;
+            /** @default [] */
+            permissions: components["schemas"]["PermissionCode"][];
+        };
+        /** @description 只提交需要修改的字段；权限点请使用 `PUT /roles/{id}/grants`。 */
+        RoleUpdateRequest: {
+            roleCode?: string;
+            roleName?: string;
+            dataScope?: components["schemas"]["DataScope"];
+            remark?: string | null;
+            /** @enum {integer} */
+            status?: 0 | 1;
+        };
+        /** @description 全量替换角色的权限点集合；传空数组即清空。 */
+        RoleGrantRequest: {
+            permissions: components["schemas"]["PermissionCode"][];
+        };
+        CompanyCreateRequest: {
+            companyCode: string;
+            companyName: string;
+            /**
+             * @default 1
+             * @enum {integer}
+             */
+            status: 0 | 1;
+        };
+        /** @description 只提交需要修改的字段。 */
+        CompanyUpdateRequest: {
+            companyCode?: string;
+            companyName?: string;
+            /** @enum {integer} */
+            status?: 0 | 1;
+        };
+        DeptCreateRequest: {
+            companyId: components["schemas"]["Id"];
+            /**
+             * @description 上级部门 ID；根部门为 "0"
+             * @default 0
+             */
+            parentId: string;
+            deptCode: string;
+            deptName: string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            sortNo: number;
+            /**
+             * @default 1
+             * @enum {integer}
+             */
+            status: 0 | 1;
+        };
+        /** @description 只提交需要修改的字段；`companyId` 不可修改，`ancestors` 由后端重算。 */
+        DeptUpdateRequest: {
+            parentId?: string;
+            deptCode?: string;
+            deptName?: string;
+            /** Format: int32 */
+            sortNo?: number;
+            /** @enum {integer} */
+            status?: 0 | 1;
         };
         ResultLogin: {
             code: components["schemas"]["ErrorCode"];
@@ -1184,6 +1748,24 @@ export interface components {
             msg: string;
             data: components["schemas"]["ImportCommitResult"];
         };
+        /**
+         * @description 提交冲突（code 固定 409）。预校验 `failRows > 0` 时 `data.failRows` 给出失败行数；
+         *     文件已提交或其它冲突时 `data` 为 null。
+         */
+        ResultImportCommitConflict: {
+            /**
+             * @example 409
+             * @enum {integer}
+             */
+            code: 409;
+            /** @example 预校验存在 3 行失败，禁止提交 */
+            msg: string;
+            /** @description 失败行数；其它冲突时为 null */
+            data: {
+                batchId: components["schemas"]["Id"];
+                failRows: number;
+            } | null;
+        };
         ResultMonthlyReport: {
             code: components["schemas"]["ErrorCode"];
             /** @example ok */
@@ -1195,6 +1777,48 @@ export interface components {
             /** @example ok */
             msg: string;
             data: components["schemas"]["AnnualReportRow"][];
+        };
+        ResultCompany: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["Company"];
+        };
+        ResultDept: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["Dept"];
+        };
+        ResultUser: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["User"];
+        };
+        ResultUserPage: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["UserPage"];
+        };
+        ResultRole: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["Role"];
+        };
+        ResultRoleList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["Role"][];
+        };
+        ResultPermissionList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["PermissionItem"][];
         };
     };
     responses: {
@@ -1370,11 +1994,42 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回主体 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultCompany"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listDepts: {
         parameters: {
             query: {
                 /** @description 法人主体 ID */
                 companyId: components["schemas"]["Id"];
+                /** @description 是否包含停用部门；默认 false（仅返回启用部门） */
+                includeDisabled?: boolean;
             };
             header?: never;
             path?: never;
@@ -1394,6 +2049,35 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createDept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeptCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回部门 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultDept"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1997,6 +2681,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getImportBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 导入批次 ID（字符串形式的 Long） */
+                batchId: components["parameters"]["BatchIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 批次详情（含错误明细，最多 5000 条） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportValidate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     commitImport: {
         parameters: {
             query?: never;
@@ -2021,7 +2732,15 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            409: components["responses"]["Conflict"];
+            /** @description 预校验存在失败行（`data.failRows` 给出数量）或文件已提交 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportCommitConflict"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };
@@ -2087,6 +2806,7 @@ export interface operations {
             query: {
                 year: string;
                 groupBy: components["schemas"]["ReportGroupBy"];
+                /** @description groupBy=DEPT 且操作者范围含多个主体时必填，缺则 400 */
                 companyId?: components["schemas"]["Id"];
                 deptId?: components["schemas"]["Id"];
             };
@@ -2108,6 +2828,486 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    exportReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description xlsx 二进制流（不是统一响应包） */
+            200: {
+                headers: {
+                    /** @description 附件文件名，如 `attachment; filename="monthly-2026-11-20261126T101500.xlsx"` */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            /** @description 参数校验失败；返回 JSON 统一响应包 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            /** @description 未认证；返回 JSON 统一响应包 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            /** @description 缺少 `payroll:export` 权限；返回 JSON 统一响应包 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            /** @description 导出失败；返回 JSON 统一响应包 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description 页码，从 1 开始 */
+                current?: components["parameters"]["Current"];
+                /** @description 每页条数 */
+                size?: components["parameters"]["Size"];
+                /** @description 用户名或姓名模糊匹配 */
+                keyword?: string;
+                companyId?: components["schemas"]["Id"];
+                deptId?: components["schemas"]["Id"];
+                /** @description 1启用 0停用 */
+                status?: 0 | 1;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户分页结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultUserPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回用户（不含密码） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回用户（不含密码） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功，`data` 为 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description 重置成功，返回用户（不含密码） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 权限点目录 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultPermissionList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listRoles: {
+        parameters: {
+            query?: {
+                companyId?: components["schemas"]["Id"];
+                /** @description 1启用 0停用 */
+                status?: 0 | 1;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 角色列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultRoleList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回角色 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回角色 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功，`data` 为 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceRoleGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description 设置成功，返回角色（含最新权限点） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultRole"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateDept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeptUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回部门 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultDept"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteDept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功，`data` 为 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回主体 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultCompany"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

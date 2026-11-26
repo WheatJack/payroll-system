@@ -42,6 +42,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/period/PayrollGridView.vue'),
         meta: { title: '编制台', perm: 'payroll:record:view' },
       },
+      {
+        path: 'reports/monthly',
+        name: 'report-monthly',
+        component: () => import('@/views/report/MonthlyReportView.vue'),
+        meta: { title: '月度报表', perm: 'payroll:record:view' },
+      },
+      {
+        path: 'reports/annual',
+        name: 'report-annual',
+        component: () => import('@/views/report/AnnualReportView.vue'),
+        meta: { title: '年度报表', perm: 'payroll:record:view' },
+      },
       // 开发专用：vxe-table PoC 只在 dev 注册，生产环境不存在该路由
       ...(import.meta.env.DEV
         ? [
