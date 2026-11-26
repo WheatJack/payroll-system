@@ -33,6 +33,10 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 payroll:
+  calendar:
+    # 法定节假日（逗号分隔 ISO 日期）。M1 允许为空，只按周末计算工作日；
+    # 需要精确口径时由运维注入，例：PAYROLL_HOLIDAYS=2026-10-01,2026-10-02
+    holidays: ${PAYROLL_HOLIDAYS:}
   storage:
     type: local
     local-path: ./data/import

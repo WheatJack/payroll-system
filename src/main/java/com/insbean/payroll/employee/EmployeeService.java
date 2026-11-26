@@ -15,6 +15,7 @@ import com.insbean.payroll.security.CryptoService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.Objects;
 
 @Service
@@ -165,9 +166,58 @@ public class EmployeeService {
 
         if (!Objects.equals(previousCompany, entity.getCompanyId())
                 || !Objects.equals(previousDept, entity.getDeptId())) {
-            employmentMapper.updateOpenInterval(entity.getId(), entity.getCompanyId(), entity.getDeptId());
+            // 调动：关闭旧区间 + 追加新区间（R12）。绝不就地改写既有行。
+            transfer(entity.getId(), entity.getCompanyId(), entity.getDeptId(), LocalDate.now());
         }
         return toDto(entity);
+    }
+
+    /**
+     * 员工调动到另一个主体/部门。
+     *
+     * <p>M1 不做「调动单」（那是二期），但必须保证历史归属可追溯：
+     * 旧区间在 {@code effectiveDate - 1} 关闭，新区间从 {@code effectiveDate} 起生效，
+     * {@code change_type = TRANSFER}。这样解锁重算历史期间时，取到的仍是当时的主体。
+     *
+     * @param effectiveDate 调动生效日（含），必须晚于当前任职区间的起始日
+     */
+    @Transactional
+    public void transfer(Long employeeId, Long companyId, Long deptId, LocalDate effectiveDate) {
+        if (effectiveDate == null) {
+            throw new BizException(400, "调动生效日必填");
+        }
+        requireEmployee(employeeId);
+
+        EmpEmploymentEntity open = employmentMapper.selectOne(
+                Wrappers.<EmpEmploymentEntity>lambdaQuery()
+                        .eq(EmpEmploymentEntity::getEmployeeId, employeeId)
+                        .isNull(EmpEmploymentEntity::getEndDate)
+                        .orderByDesc(EmpEmploymentEntity::getStartDate)
+                        .last("LIMIT 1"));
+        if (open != null) {
+            if (!effectiveDate.isAfter(open.getStartDate())) {
+                throw new BizException(400, "调动生效日必须晚于当前任职区间的起始日");
+            }
+            employmentMapper.closeInterval(open.getId(), effectiveDate.minusDays(1));
+        }
+
+        EmpEmploymentEntity entity = new EmpEmploymentEntity();
+        entity.setEmployeeId(employeeId);
+        entity.setCompanyId(companyId);
+        entity.setDeptId(deptId);
+        entity.setStartDate(effectiveDate);
+        entity.setChangeType("TRANSFER");
+        entity.setDeleted(0);
+        employmentMapper.insert(entity);
+    }
+
+    /**
+     * 某员工在指定日期归属的法人主体。
+     * 没有任职区间数据的老人员回落到人员表当前归属，避免历史数据全员漏算。
+     */
+    public Long companyAt(Long employeeId, LocalDate date) {
+        Long companyId = employmentMapper.findCompanyAt(employeeId, date);
+        return companyId != null ? companyId : requireEmployee(employeeId).getCompanyId();
     }
 
     public EmployeeDTO get(Long id) {

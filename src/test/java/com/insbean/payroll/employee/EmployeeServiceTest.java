@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -106,6 +107,53 @@ class EmployeeServiceTest extends AbstractDbTest {
                         null, null, 1, null), TestDb.COMPANY_DEFAULT))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("工号");
+    }
+
+    @Test
+    void 调动追加新区间而不改写历史() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+
+        service.transfer(id, TestDb.COMPANY_BEIJING, TestDb.DEPT_BEIJING, LocalDate.of(2026, 12, 1));
+
+        // 调动前的日期仍然归属原主体（历史工资表解锁重算不会串主体）
+        assertThat(service.companyAt(id, LocalDate.of(2026, 11, 30))).isEqualTo(TestDb.COMPANY_DEFAULT);
+        assertThat(service.companyAt(id, LocalDate.of(2026, 12, 1))).isEqualTo(TestDb.COMPANY_BEIJING);
+        assertThat(service.companyAt(id, LocalDate.of(2027, 1, 1))).isEqualTo(TestDb.COMPANY_BEIJING);
+
+        List<LocalDate> endDates = jdbc.queryForList(
+                "SELECT end_date FROM emp_employment WHERE employee_id = ? ORDER BY start_date",
+                LocalDate.class, id);
+        List<String> changeTypes = jdbc.queryForList(
+                "SELECT change_type FROM emp_employment WHERE employee_id = ? ORDER BY start_date",
+                String.class, id);
+
+        assertThat(endDates).hasSize(2);
+        assertThat(endDates.get(0)).isEqualTo(LocalDate.of(2026, 11, 30));
+        assertThat(endDates.get(1)).isNull();
+        assertThat(changeTypes).containsExactly("HIRE", "TRANSFER");
+    }
+
+    @Test
+    void 调动生效日不能早于当前区间起始日() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+
+        assertThatThrownBy(() -> service.transfer(id, TestDb.COMPANY_BEIJING, TestDb.DEPT_BEIJING,
+                LocalDate.of(2020, 3, 1)))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("必须晚于");
+    }
+
+    @Test
+    void 通过修改接口改部门也走追加区间() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+
+        service.update(id, new EmployeeSaveReq(null, null, null, null, null, null, null,
+                null, null, null, TestDb.DEPT_BEIJING, null, null, null, null, null));
+
+        Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employment WHERE employee_id = ?", Integer.class, id);
+        assertThat(rows).isEqualTo(2);
+        assertThat(service.companyAt(id, LocalDate.now().minusDays(1))).isEqualTo(TestDb.COMPANY_DEFAULT);
     }
 
     private EmployeeSaveReq createReq(String empNo, String idNo) {

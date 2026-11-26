@@ -12,6 +12,7 @@ import com.insbean.payroll.domain.payroll.EmployeePayContext;
 import com.insbean.payroll.domain.payroll.PayItemDef;
 import com.insbean.payroll.domain.payroll.PayrollCalculator;
 import com.insbean.payroll.domain.payroll.PayrollResult;
+import com.insbean.payroll.calendar.WorkingDays;
 import com.insbean.payroll.employee.CompProfileService;
 import com.insbean.payroll.employee.dto.CompProfileDTO;
 import com.insbean.payroll.employee.dto.CompProfileItemDTO;
@@ -37,7 +38,6 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -88,6 +88,7 @@ public class GenerateService {
     private final PayRunMapper runMapper;
     private final RecordAssembler recordAssembler;
     private final ObjectMapper objectMapper;
+    private final WorkingDays workingDays;
     private final TransactionTemplate transactionTemplate;
 
     private final PayrollCalculator calculator = new PayrollCalculator();
@@ -103,6 +104,7 @@ public class GenerateService {
                            PayRunMapper runMapper,
                            RecordAssembler recordAssembler,
                            ObjectMapper objectMapper,
+                           WorkingDays workingDays,
                            PlatformTransactionManager transactionManager) {
         this.periodService = periodService;
         this.periodMapper = periodMapper;
@@ -115,6 +117,7 @@ public class GenerateService {
         this.runMapper = runMapper;
         this.recordAssembler = recordAssembler;
         this.objectMapper = objectMapper;
+        this.workingDays = workingDays;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -143,6 +146,9 @@ public class GenerateService {
             return run.getId();
         } catch (RuntimeException e) {
             log.warn("期间 {} 生成失败: {}", periodId, e.getMessage());
+            // R10：失败原因必须落到 pay_run.error_msg，不能只靠这次 HTTP 异常——
+            // 将来真改异步后，前端只能靠轮询拿到原因。
+            progress.failure = e.getMessage();
             closeRun(run, "FAILED", progress);
             throw e;
         } finally {
@@ -156,8 +162,14 @@ public class GenerateService {
             throw new BizException(404, "核算批次不存在");
         }
         Progress progress = readProgress(run.getErrorMsg());
+        List<RunErrorDTO> errors = new ArrayList<>();
+        if (progress.failure != null && !progress.failure.isBlank()) {
+            // 批次级失败原因（如跨主体重复）没有具体工号，empNo 留空，前端整条提示即可
+            errors.add(new RunErrorDTO("", progress.failure));
+        }
+        errors.addAll(progress.errors);
         return new RunProgressDTO(run.getStatus(), progress.total, progress.success,
-                progress.failed, progress.errors, progress.skipped);
+                progress.failed, errors, progress.skipped);
     }
 
     // ------------------------------------------------------------------ 生成主流程
@@ -286,10 +298,12 @@ public class GenerateService {
     }
 
     /**
-     * 入职/离职当月按实际计薪天数折算；全月在岗返回 null 表示不折算。
-     * 本期按自然日计数（业务尚未确认按工作日口径），规则改动只影响这里。
+     * 入职/离职当月按实际**计薪天数**折算；全月在岗返回 null 表示不折算。
+     *
+     * <p>计薪天数是**工作日**口径：21.75 = (365 − 104) ÷ 12，分母本身就排除了周末。
+     * 用自然日做分子会造成量纲错误（2026-11-16 入职：11 个工作日 vs 15 个自然日）。
      */
-    static Integer payableDays(EmpEmployeeEntity emp, LocalDate periodStart, LocalDate periodEnd) {
+    Integer payableDays(EmpEmployeeEntity emp, LocalDate periodStart, LocalDate periodEnd) {
         LocalDate from = periodStart;
         LocalDate to = periodEnd;
         boolean prorated = false;
@@ -304,10 +318,7 @@ public class GenerateService {
         if (!prorated) {
             return null;
         }
-        if (to.isBefore(from)) {
-            return 0;
-        }
-        return (int) ChronoUnit.DAYS.between(from, to) + 1;
+        return workingDays.between(from, to);
     }
 
     // ------------------------------------------------------------------ 批次与汇总
@@ -365,7 +376,7 @@ public class GenerateService {
         try {
             return objectMapper.writeValueAsString(new ProgressPayload(
                     progress.total, progress.success, progress.failed,
-                    progress.errors, progress.skipped));
+                    progress.failure, progress.errors, progress.skipped));
         } catch (Exception e) {
             log.warn("进度序列化失败", e);
             return null;
@@ -382,6 +393,7 @@ public class GenerateService {
             progress.total = payload.total();
             progress.success = payload.success();
             progress.failed = payload.failed();
+            progress.failure = payload.failure();
             progress.errors = payload.errors() == null ? new ArrayList<>() : new ArrayList<>(payload.errors());
             progress.skipped = payload.skipped() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(payload.skipped());
         } catch (Exception e) {
@@ -390,7 +402,7 @@ public class GenerateService {
         return progress;
     }
 
-    private record ProgressPayload(int total, int success, int failed,
+    private record ProgressPayload(int total, int success, int failed, String failure,
                                    List<RunErrorDTO> errors, Map<String, String> skipped) {
     }
 
@@ -399,6 +411,8 @@ public class GenerateService {
         int total;
         int success;
         int failed;
+        /** 批次级失败原因；成功时为 null。 */
+        String failure;
         List<RunErrorDTO> errors = new ArrayList<>();
         Map<String, String> skipped = new LinkedHashMap<>();
     }
