@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "period": { "id": "3", "periodYm": "2026-11", "status": "EDITING" },
+    "columns": [
+      { "itemCode": "BASE_SALARY", "itemName": "基本工资", "category": "FIXED", "direction": 1, "scale": 2, "editable": false },
+      { "itemCode": "PERF_BONUS", "itemName": "绩效奖金", "category": "VARIABLE", "direction": 1, "scale": 2, "editable": true }
+    ],
+    "rows": [
+      {
+        "recordId": "101", "version": 0,
+        "employeeId": "1", "empNo": "E001", "empName": "张三",
+        "deptId": "1", "deptName": "北京研发部", "employeeType": "REGULAR", "jobLevel": "P6",
+        "seniorityYears": "6.00",
+        "grossAmount": "8600.00", "deductionAmount": "0.00", "netAmount": "8600.00",
+        "items": { "BASE_SALARY": "8000.00", "SENIORITY_PAY": "600.00" }
+      }
+    ],
+    "total": 1
+  }
+}

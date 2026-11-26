@@ -1,0 +1,2343 @@
+openapi: 3.0.3
+info:
+  title: 工资核算系统 API
+  version: 1.0.0
+  description: |
+    工资核算系统 M1 冻结契约（后端 Controller 与前端 `src/api/types.ts` 均以此为准）。
+
+    ## 全局约定（不可协商）
+
+    1. **统一前缀**：所有端点以 `/api/v1` 开头。
+    2. **统一响应包**：`{ "code": number, "msg": string, "data": T }`，`code = 0` 表示成功。
+       错误响应使用同一响应包，`code` 非 0（见 `ErrorCode`）：
+       `400` 参数校验失败 / `401` 未认证 / `403` 无权限 /
+       `409` 冲突（重复、版本冲突、期间已锁定）/ `500` 服务端错误。
+    3. **金额一律字符串**：所有金额字段为十进制字符串（如 `"8600.00"`），
+       **不允许 JSON number**。前端必须用 decimal.js 运算，禁止 `Number()` / `parseFloat`。
+       前端据此保证 `合计 === 明细加总`，不做二次舍入。
+    4. **ID 一律字符串**：后端把 `Long` 序列化为字符串，所有 `id` / `*Id` 字段
+       在 JSON 中都是字符串（如 `"101"`）。`version` 是乐观锁版本号（DB `INT`，
+       JSON 中为整数），不是 Long。
+    5. **分页参数**：`current` 从 1 开始，`size` 为每页条数；分页响应为
+       `{ records, total, current, size }`。
+    6. **枚举**：
+       - 期间状态 `DRAFT | EDITING | LOCKED | ARCHIVED`
+       - 员工类型 `REGULAR | PROBATION | INTERN | LABOR | OUTSOURCE | REHIRE`
+       - 工资项类别 `FIXED | VARIABLE | COMPUTED`
+       - 工资项方向：`1` 增加（收入）/ `2` 减少（扣款）
+    7. **年月格式**：`periodYm` 匹配 `^[0-9]{4}-(0[1-9]|1[0-2])$`（如 `"2026-11"`）。
+    8. **认证**：除 `POST /api/v1/auth/login` 外，所有端点都要求
+       `Authorization: Bearer <token>`。
+    9. **里程碑**：每个操作带 `x-milestone`。`M1` 为本期实现范围；
+       `M2`（导入、报表）只冻结契约，**M1 不实现**，前后端不要为其编写调用逻辑。
+    10. **文件下载例外**：导入模板与错误报告是二进制附件（`Content-Disposition`），
+        不使用统一响应包；其余端点一律使用统一响应包。
+  contact:
+    name: 工资核算系统
+tags:
+  - name: 认证
+    description: 登录与当前用户
+  - name: 组织
+    description: 法人主体与部门
+  - name: 人员
+    description: 人员主数据（敏感字段脱敏）
+  - name: 薪酬档案
+    description: 按生效区间版本化的薪酬档案
+  - name: 工资项
+    description: 工资项字典与列顺序
+  - name: 期间
+    description: 工资期间与状态机
+  - name: 核算批次
+    description: 异步生成与批次进度
+  - name: 编制台
+    description: 全量工资表与 changeset 批量保存
+  - name: 导入（M2）
+    description: 二期能力，M1 不实现
+  - name: 报表（M2）
+    description: 二期能力，M1 不实现
+security:
+  - bearerAuth: []
+servers:
+  - url: /
+    description: 同源部署（前端经 nginx 反向代理到后端）
+paths:
+  /api/v1/auth/login:
+    post:
+      tags: [认证]
+      summary: 登录
+      description: 用户名密码登录，返回无状态 token 与当前用户信息。
+      operationId: login
+      security: []
+      x-milestone: M1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultLogin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/auth/me:
+    get:
+      tags: [认证]
+      summary: 当前用户
+      description: 返回当前用户、权限点列表与数据范围。
+      operationId: me
+      x-milestone: M1
+      responses:
+        '200':
+          description: 当前用户
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCurrentUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/companies:
+    get:
+      tags: [组织]
+      summary: 主体列表
+      description: 返回当前用户可见的法人主体列表（不分页）。
+      operationId: listCompanies
+      x-milestone: M1
+      responses:
+        '200':
+          description: 主体列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompanyList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/depts:
+    get:
+      tags: [组织]
+      summary: 部门树（扁平）
+      description: 返回指定主体下的扁平部门列表，`ancestors` 为祖先路径，前端自行组装树。
+      operationId: listDepts
+      x-milestone: M1
+      parameters:
+        - name: companyId
+          in: query
+          required: true
+          description: 法人主体 ID
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: 部门列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultDeptList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees:
+    get:
+      tags: [人员]
+      summary: 人员分页查询
+      description: 按姓名/工号模糊、部门、员工类型、在职状态筛选。证件号只返回掩码。
+      operationId: listEmployees
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/Current'
+        - $ref: '#/components/parameters/Size'
+        - name: keyword
+          in: query
+          required: false
+          description: 姓名或工号模糊匹配
+          schema:
+            type: string
+        - name: deptId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: employeeType
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmployeeType'
+        - name: status
+          in: query
+          required: false
+          description: 1在职 2离职 3停薪留职
+          schema:
+            type: integer
+            enum: [1, 2, 3]
+      responses:
+        '200':
+          description: 人员分页结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultEmployeePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [人员]
+      summary: 新增人员
+      description: 证件号明文只在请求中出现一次，后端加密存储并生成盲索引；响应不回显明文。
+      operationId: createEmployee
+      x-milestone: M1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmployeeCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回人员详情（掩码展示）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultEmployee'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees/{id}:
+    get:
+      tags: [人员]
+      summary: 人员详情
+      description: 证件号/手机号按权限返回掩码，完整值需 `payroll:sensitive:view` 且二次确认。
+      operationId: getEmployee
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 人员详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultEmployee'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [人员]
+      summary: 修改人员
+      description: 只提交需要修改的字段。`idNo` 不修改时可省略。
+      operationId: updateEmployee
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmployeeUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回人员详情（掩码展示）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultEmployee'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees/{id}/comp-profiles:
+    get:
+      tags: [薪酬档案]
+      summary: 薪酬档案时间线
+      description: 按 `effectiveFrom` 升序返回该员工全部薪酬档案区间。
+      operationId: listCompProfiles
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 薪酬档案列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompProfileList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/comp-profiles:
+    post:
+      tags: [薪酬档案]
+      summary: 新增生效区间
+      description: 校验区间不重叠；与已有区间重叠时返回 400。
+      operationId: createCompProfile
+      x-milestone: M1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompProfileCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回该段薪酬档案
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/comp-profiles/{id}:
+    put:
+      tags: [薪酬档案]
+      summary: 修改薪酬档案
+      description: |
+        界面不暴露“版本”概念：后端自动截断旧区间并新建一段，
+        返回新的当前区间（id 可能变化）。历史工资表不被改写。
+      operationId: updateCompProfile
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompProfileUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回新的生效区间
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultCompProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/items:
+    get:
+      tags: [工资项]
+      summary: 工资项字典
+      description: 合并集团通用科目（companyId=0）与当前主体科目，按 `sortNo` 升序。
+      operationId: listPayItems
+      x-milestone: M1
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/PayItemCategory'
+        - name: status
+          in: query
+          required: false
+          description: 1启用 0停用
+          schema:
+            type: integer
+            enum: [0, 1]
+      responses:
+        '200':
+          description: 工资项列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPayItemList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [工资项]
+      summary: 新增工资项
+      operationId: createPayItem
+      x-milestone: M1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayItemCreateRequest'
+      responses:
+        '200':
+          description: 新增成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPayItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/items/{id}:
+    put:
+      tags: [工资项]
+      summary: 修改工资项
+      description: 已被工资表使用的科目禁止修改 `category` 与 `direction`（返回 409）。
+      operationId: updatePayItem
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayItemUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPayItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods:
+    get:
+      tags: [期间]
+      summary: 期间列表
+      description: 返回主体下的工资期间（不分页），按 `periodYm` 倒序。
+      operationId: listPeriods
+      x-milestone: M1
+      parameters:
+        - name: companyId
+          in: query
+          required: false
+          description: 不传则取当前用户所属主体
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: 期间列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPeriodList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [期间]
+      summary: 新建期间
+      description: 按 `(companyId, periodYm)` 幂等：已存在时直接返回已有期间，不报错。
+      operationId: createPeriod
+      x-milestone: M1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PeriodCreateRequest'
+      responses:
+        '200':
+          description: 新建或已存在的期间
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPeriod'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods/{id}/generate:
+    post:
+      tags: [核算批次]
+      summary: 生成基础数据（异步）
+      description: 立即返回 `runId`，前端轮询 `GET /api/v1/runs/{runId}` 获取进度。
+      operationId: generatePeriod
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultGenerate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/runs/{runId}:
+    get:
+      tags: [核算批次]
+      summary: 批次进度
+      description: 轮询直到 `status` 为 `SUCCESS` 或 `FAILED`。`skipped` 的键为工号，值为跳过原因。
+      operationId: getRun
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+      responses:
+        '200':
+          description: 批次进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultRunProgress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods/{id}/grid:
+    get:
+      tags: [编制台]
+      summary: 全量工资表
+      description: |
+        返回该期间**全部**核算行，**不分页**（编制台需要一次性渲染与合计）。
+        列由 `columns` 动态驱动，`items` 的键为 `itemCode`，值为字符串金额。
+        示例见 `docs/api/examples/grid-response.json`。
+      operationId: getGrid
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 工资表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultGrid'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods/{id}/records:
+    patch:
+      tags: [编制台]
+      summary: changeset 批量保存
+      description: |
+        只提交改动的单元格。逐条按 `(recordId, version)` 做乐观锁更新；
+        任一冲突则整体失败，返回 `code=409` 且 `data.conflicts[].recordId` 列出全部冲突项。
+        成功后重算该条合计并 `version+1`，返回受影响行（含新 version 与新合计）。
+        示例见 `docs/api/examples/changeset-request.json`。
+      operationId: saveChangeset
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangesetRequest'
+      responses:
+        '200':
+          description: 保存成功，返回受影响行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultChangeset'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: 版本冲突或期间已锁定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultChangesetConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods/{id}/lock:
+    post:
+      tags: [期间]
+      summary: 锁定期间
+      description: 锁定人不能是本期编制人（C4 内控）；违反返回 400。成功返回最新期间。
+      operationId: lockPeriod
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 锁定成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPeriod'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/periods/{id}/unlock:
+    post:
+      tags: [期间]
+      summary: 解锁期间（高危）
+      description: 必须填写原因，全程审计。成功后期间回到 `EDITING`。
+      operationId: unlockPeriod
+      x-milestone: M1
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnlockRequest'
+      responses:
+        '200':
+          description: 解锁成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPeriod'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/template:
+    get:
+      tags: [导入（M2）]
+      summary: 下载导入模板（M2）
+      description: 列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
+      operationId: downloadImportTemplate
+      x-milestone: M2
+      parameters:
+        - name: periodId
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: bizType
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/ImportBizType'
+      responses:
+        '200':
+          description: xlsx 模板文件
+          headers:
+            Content-Disposition:
+              description: 附件文件名
+              schema:
+                type: string
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/validate:
+    post:
+      tags: [导入（M2）]
+      summary: 上传并预校验（M2）
+      description: 只预校验不落库；返回批次号、成功/失败行数与错误明细。
+      operationId: validateImport
+      x-milestone: M2
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, periodId, bizType]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: xlsx 文件，≤ 10MB、≤ 5 万行
+                periodId:
+                  $ref: '#/components/schemas/Id'
+                bizType:
+                  $ref: '#/components/schemas/ImportBizType'
+                importMode:
+                  $ref: '#/components/schemas/ImportMode'
+      responses:
+        '200':
+          description: 预校验结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportValidate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/{batchId}/commit:
+    post:
+      tags: [导入（M2）]
+      summary: 确认提交导入（M2）
+      description: 事务内 upsert 并生成核算明细。已提交过的文件 hash 会被拒绝（409）。
+      operationId: commitImport
+      x-milestone: M2
+      parameters:
+        - $ref: '#/components/parameters/BatchIdPath'
+      responses:
+        '200':
+          description: 提交结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportCommit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/{batchId}/errors:
+    get:
+      tags: [导入（M2）]
+      summary: 下载错误报告（M2）
+      description: 返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
+      operationId: downloadImportErrors
+      x-milestone: M2
+      parameters:
+        - $ref: '#/components/parameters/BatchIdPath'
+      responses:
+        '200':
+          description: xlsx 错误报告
+          headers:
+            Content-Disposition:
+              description: 附件文件名
+              schema:
+                type: string
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/reports/monthly:
+    get:
+      tags: [报表（M2）]
+      summary: 月度汇总（M2）
+      description: 按部门汇总的月度数据；仅统计已锁定及以后期间。
+      operationId: getMonthlyReport
+      x-milestone: M2
+      parameters:
+        - name: periodYm
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+        - name: companyId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: deptId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: 月度汇总行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultMonthlyReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/reports/annual:
+    get:
+      tags: [报表（M2）]
+      summary: 年度汇总（M2）
+      description: 按人或按部门汇总的年度数据；仅统计 `LOCKED` 及以后期间。
+      operationId: getAnnualReport
+      x-milestone: M2
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{4}$'
+        - name: groupBy
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/ReportGroupBy'
+        - name: companyId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: deptId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: 年度汇总行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultAnnualReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: '登录返回的 token，放在 Authorization 头部的 Bearer 前缀之后。'
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      description: 资源 ID（字符串形式的 Long）
+      schema:
+        $ref: '#/components/schemas/Id'
+    RunIdPath:
+      name: runId
+      in: path
+      required: true
+      description: 核算批次 ID（字符串形式的 Long）
+      schema:
+        $ref: '#/components/schemas/Id'
+    BatchIdPath:
+      name: batchId
+      in: path
+      required: true
+      description: 导入批次 ID（字符串形式的 Long）
+      schema:
+        $ref: '#/components/schemas/Id'
+    Current:
+      name: current
+      in: query
+      required: false
+      description: 页码，从 1 开始
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页条数
+      schema:
+        type: integer
+        minimum: 1
+        default: 20
+
+  responses:
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Result'
+          example:
+            code: 400
+            msg: 参数校验失败
+            data: null
+    Unauthorized:
+      description: 未认证或登录已过期
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Result'
+          example:
+            code: 401
+            msg: 未认证或登录已过期
+            data: null
+    Forbidden:
+      description: 无权限执行该操作
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Result'
+          example:
+            code: 403
+            msg: 无权限执行该操作
+            data: null
+    Conflict:
+      description: 冲突（重复数据、版本冲突或期间已锁定）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Result'
+          example:
+            code: 409
+            msg: 期间已锁定，禁止修改
+            data: null
+    InternalError:
+      description: 服务端错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Result'
+          example:
+            code: 500
+            msg: 服务器内部错误
+            data: null
+
+  schemas:
+    # ---------------------------------------------------------------
+    # 基础类型
+    # ---------------------------------------------------------------
+    Id:
+      type: string
+      description: 字符串形式的 Long ID（JS 无法安全表示超过 2^53 的整数）
+      pattern: '^[0-9]+$'
+      example: '101'
+
+    Money:
+      type: string
+      format: decimal
+      description: 金额十进制字符串，禁止使用 JSON number；展示统一 2 位小数
+      pattern: '^-?[0-9]{1,14}(\.[0-9]{1,4})?$'
+      example: '8600.00'
+
+    DecimalString:
+      type: string
+      format: decimal
+      description: 非金额的十进制字符串（如工龄、计薪天数）
+      pattern: '^-?[0-9]{1,10}(\.[0-9]{1,4})?$'
+      example: '6.00'
+
+    ErrorCode:
+      type: integer
+      format: int32
+      description: |
+        业务状态码。0=成功；400=参数校验失败；401=未认证；403=无权限；
+        409=冲突（重复数据 / 版本冲突 / 期间已锁定）；500=服务端错误。
+        错误响应仍使用统一响应包，`code` 非 0。
+      enum: [0, 400, 401, 403, 409, 500]
+
+    Result:
+      type: object
+      description: 统一响应包。成功时 `code=0`；失败时 `code` 非 0，`msg` 为可展示的错误信息。
+      required: [code, msg]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          description: 业务数据；错误时为 null（版本冲突的明细见 ResultChangesetConflict）
+
+    # ---------------------------------------------------------------
+    # 枚举
+    # ---------------------------------------------------------------
+    PeriodStatus:
+      type: string
+      description: 期间状态
+      enum: [DRAFT, EDITING, LOCKED, ARCHIVED]
+
+    EmployeeType:
+      type: string
+      description: 员工类型
+      enum: [REGULAR, PROBATION, INTERN, LABOR, OUTSOURCE, REHIRE]
+
+    PayItemCategory:
+      type: string
+      description: 工资项类别（FIXED 固定 / VARIABLE 变动 / COMPUTED 计算）
+      enum: [FIXED, VARIABLE, COMPUTED]
+
+    PayDirection:
+      type: integer
+      description: 工资项方向：1 增加（收入），2 减少（扣款）
+      enum: [1, 2]
+
+    PayItemDataType:
+      type: string
+      description: 工资项数据类型
+      enum: [AMOUNT, HOURS, DAYS, RATE]
+
+    DataScope:
+      type: string
+      description: 数据范围（ALL 集团 / COMPANY 本公司 / DEPT_SUB 部门及下级 / DEPT 本部门 / SELF 本人）
+      enum: [ALL, COMPANY, DEPT_SUB, DEPT, SELF]
+
+    RunStatus:
+      type: string
+      description: 核算批次状态
+      enum: [RUNNING, SUCCESS, FAILED]
+
+    ImportBizType:
+      type: string
+      description: 导入业务类型（FIXED 固定项 / VARIABLE 变动项）
+      enum: [FIXED, VARIABLE]
+
+    ImportMode:
+      type: string
+      description: 导入模式（UPSERT 有则覆盖 / APPEND 有则累加 / INSERT_ONLY 有则跳过）
+      enum: [UPSERT, APPEND, INSERT_ONLY]
+
+    ImportBatchStatus:
+      type: string
+      description: 导入批次状态
+      enum: [VALIDATING, VALIDATED, COMMITTED, FAILED]
+
+    ReportGroupBy:
+      type: string
+      description: 年度汇总分组方式（EMP 按人 / DEPT 按部门）
+      enum: [EMP, DEPT]
+
+    # ---------------------------------------------------------------
+    # 认证
+    # ---------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+
+    CurrentUser:
+      type: object
+      description: 当前登录用户
+      required: [userId, username, realName, companyId, dataScope, permissions]
+      properties:
+        userId:
+          $ref: '#/components/schemas/Id'
+        username:
+          type: string
+          maxLength: 64
+        realName:
+          type: string
+          maxLength: 64
+        companyId:
+          $ref: '#/components/schemas/Id'
+        employeeId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 关联人员 ID；未关联人员的账号为 null
+        dataScope:
+          $ref: '#/components/schemas/DataScope'
+        permissions:
+          type: array
+          description: 权限点列表，如 payroll:record:edit
+          items:
+            type: string
+
+    LoginResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: 无状态 HMAC 签名 token，后续放入 Authorization 头部（Bearer 前缀）
+        user:
+          $ref: '#/components/schemas/CurrentUser'
+
+    # ---------------------------------------------------------------
+    # 组织
+    # ---------------------------------------------------------------
+    Company:
+      type: object
+      required: [id, companyCode, companyName, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyCode:
+          type: string
+          maxLength: 32
+        companyName:
+          type: string
+          maxLength: 128
+        status:
+          type: integer
+          description: 1启用 0停用
+          enum: [0, 1]
+
+    Dept:
+      type: object
+      description: 扁平部门节点；前端按 parentId/ancestors 自行组装树
+      required: [id, companyId, parentId, deptCode, deptName, ancestors, sortNo, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        parentId:
+          type: string
+          pattern: '^[0-9]+$'
+          description: 上级部门 ID；根部门为 "0"
+          example: '0'
+        deptCode:
+          type: string
+          maxLength: 32
+        deptName:
+          type: string
+          maxLength: 64
+        ancestors:
+          type: string
+          description: 祖先路径，如 ",1,2,3,"
+          example: ',1,2,'
+        sortNo:
+          type: integer
+          format: int32
+        status:
+          type: integer
+          description: 1启用 0停用
+          enum: [0, 1]
+
+    # ---------------------------------------------------------------
+    # 人员
+    # ---------------------------------------------------------------
+    Employee:
+      type: object
+      description: 人员详情。证件号/手机号只返回掩码，不返回明文。
+      required:
+        [id, companyId, empNo, name, gender, idType, idNoMask, employeeType,
+         deptId, hireDate, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        empNo:
+          type: string
+          maxLength: 32
+          example: E001
+        name:
+          type: string
+          maxLength: 64
+          example: 张三
+        gender:
+          type: integer
+          description: 0未知 1男 2女
+          enum: [0, 1, 2]
+        idType:
+          type: string
+          maxLength: 16
+          example: ID_CARD
+        idNoMask:
+          type: string
+          maxLength: 32
+          example: '****1234'
+        mobileMask:
+          type: string
+          nullable: true
+          maxLength: 16
+          example: '138****8000'
+        employeeType:
+          $ref: '#/components/schemas/EmployeeType'
+        jobLevel:
+          type: string
+          nullable: true
+          maxLength: 32
+          example: P6
+        positionName:
+          type: string
+          nullable: true
+          maxLength: 64
+        deptId:
+          $ref: '#/components/schemas/Id'
+        hireDate:
+          type: string
+          format: date
+          example: '2020-03-01'
+        workStartDate:
+          type: string
+          format: date
+          nullable: true
+        leaveDate:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: integer
+          description: 1在职 2离职 3停薪留职
+          enum: [1, 2, 3]
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    EmployeeCreateRequest:
+      type: object
+      required: [empNo, name, idNo, employeeType, deptId, hireDate]
+      properties:
+        companyId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 缺省取当前用户所属主体
+        empNo:
+          type: string
+          minLength: 1
+          maxLength: 32
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        gender:
+          type: integer
+          enum: [0, 1, 2]
+          default: 0
+        idType:
+          type: string
+          maxLength: 16
+          default: ID_CARD
+        idNo:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: 证件号明文，仅用于后端加密 + 盲索引查重，不会回显
+        mobile:
+          type: string
+          nullable: true
+          maxLength: 20
+          description: 手机号明文，后端加密存储
+        employeeType:
+          $ref: '#/components/schemas/EmployeeType'
+        jobLevel:
+          type: string
+          nullable: true
+          maxLength: 32
+        positionName:
+          type: string
+          nullable: true
+          maxLength: 64
+        deptId:
+          $ref: '#/components/schemas/Id'
+        hireDate:
+          type: string
+          format: date
+        workStartDate:
+          type: string
+          format: date
+          nullable: true
+        leaveDate:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: integer
+          enum: [1, 2, 3]
+          default: 1
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    EmployeeUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段；证件号不改时可省略 idNo
+      properties:
+        empNo:
+          type: string
+          minLength: 1
+          maxLength: 32
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        gender:
+          type: integer
+          enum: [0, 1, 2]
+        idType:
+          type: string
+          maxLength: 16
+        idNo:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: 仅修改证件号时提交
+        mobile:
+          type: string
+          nullable: true
+          maxLength: 20
+        employeeType:
+          $ref: '#/components/schemas/EmployeeType'
+        jobLevel:
+          type: string
+          nullable: true
+          maxLength: 32
+        positionName:
+          type: string
+          nullable: true
+          maxLength: 64
+        deptId:
+          $ref: '#/components/schemas/Id'
+        hireDate:
+          type: string
+          format: date
+        workStartDate:
+          type: string
+          format: date
+          nullable: true
+        leaveDate:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: integer
+          enum: [1, 2, 3]
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    EmployeePage:
+      type: object
+      required: [records, total, current, size]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/Employee'
+        total:
+          type: integer
+          format: int64
+        current:
+          type: integer
+        size:
+          type: integer
+
+    # ---------------------------------------------------------------
+    # 薪酬档案
+    # ---------------------------------------------------------------
+    CompProfileItem:
+      type: object
+      required: [itemCode, amount]
+      properties:
+        itemCode:
+          type: string
+          maxLength: 32
+          example: POST_ALLOW
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    CompProfile:
+      type: object
+      description: 一段生效区间；effectiveTo 为 null 表示至今
+      required: [id, employeeId, effectiveFrom, baseSalary, status, items]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        employeeId:
+          $ref: '#/components/schemas/Id'
+        effectiveFrom:
+          type: string
+          format: date
+          example: '2025-07-01'
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+          example: null
+        baseSalary:
+          $ref: '#/components/schemas/Money'
+        changeReason:
+          type: string
+          nullable: true
+          maxLength: 255
+        status:
+          type: integer
+          description: 1有效 2作废
+          enum: [1, 2]
+        items:
+          type: array
+          description: 固定津贴明细
+          items:
+            $ref: '#/components/schemas/CompProfileItem'
+
+    CompProfileCreateRequest:
+      type: object
+      required: [employeeId, effectiveFrom, baseSalary]
+      properties:
+        employeeId:
+          $ref: '#/components/schemas/Id'
+        effectiveFrom:
+          type: string
+          format: date
+        baseSalary:
+          $ref: '#/components/schemas/Money'
+        changeReason:
+          type: string
+          nullable: true
+          maxLength: 255
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompProfileItem'
+
+    CompProfileUpdateRequest:
+      type: object
+      description: 修改生效日或金额；后端自动截断旧区间并新建一段
+      properties:
+        effectiveFrom:
+          type: string
+          format: date
+        baseSalary:
+          $ref: '#/components/schemas/Money'
+        changeReason:
+          type: string
+          nullable: true
+          maxLength: 255
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompProfileItem'
+
+    # ---------------------------------------------------------------
+    # 工资项
+    # ---------------------------------------------------------------
+    PayItem:
+      type: object
+      required:
+        [id, companyId, itemCode, itemName, category, direction, dataType,
+         precisionScale, includeInGross, editable, importable, sortNo, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+          description: 0 表示集团通用科目
+        itemCode:
+          type: string
+          maxLength: 32
+          example: PERF_BONUS
+        itemName:
+          type: string
+          maxLength: 64
+          example: 绩效奖金
+        category:
+          $ref: '#/components/schemas/PayItemCategory'
+        direction:
+          $ref: '#/components/schemas/PayDirection'
+        dataType:
+          $ref: '#/components/schemas/PayItemDataType'
+        precisionScale:
+          type: integer
+          format: int32
+          example: 2
+        includeInGross:
+          type: boolean
+          description: 是否计入应发合计
+        editable:
+          type: boolean
+          description: 是否允许手工编辑
+        importable:
+          type: boolean
+          description: 是否允许导入
+        sortNo:
+          type: integer
+          format: int32
+          description: 工资表列顺序
+        status:
+          type: integer
+          description: 1启用 0停用
+          enum: [0, 1]
+
+    PayItemCreateRequest:
+      type: object
+      required: [itemCode, itemName, category, direction]
+      properties:
+        companyId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 缺省取当前用户所属主体；0 表示集团通用
+        itemCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        itemName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        category:
+          $ref: '#/components/schemas/PayItemCategory'
+        direction:
+          $ref: '#/components/schemas/PayDirection'
+        dataType:
+          $ref: '#/components/schemas/PayItemDataType'
+        precisionScale:
+          type: integer
+          format: int32
+          default: 2
+        includeInGross:
+          type: boolean
+          default: true
+        editable:
+          type: boolean
+          default: true
+        importable:
+          type: boolean
+          default: true
+        sortNo:
+          type: integer
+          format: int32
+          default: 0
+        status:
+          type: integer
+          enum: [0, 1]
+          default: 1
+
+    PayItemUpdateRequest:
+      type: object
+      description: 已被使用的科目禁止修改 category 与 direction（409）
+      properties:
+        itemName:
+          type: string
+          minLength: 1
+          maxLength: 64
+        category:
+          $ref: '#/components/schemas/PayItemCategory'
+        direction:
+          $ref: '#/components/schemas/PayDirection'
+        dataType:
+          $ref: '#/components/schemas/PayItemDataType'
+        precisionScale:
+          type: integer
+          format: int32
+        includeInGross:
+          type: boolean
+        editable:
+          type: boolean
+        importable:
+          type: boolean
+        sortNo:
+          type: integer
+          format: int32
+        status:
+          type: integer
+          enum: [0, 1]
+
+    # ---------------------------------------------------------------
+    # 期间与批次
+    # ---------------------------------------------------------------
+    Period:
+      type: object
+      required:
+        [id, companyId, periodYm, status, employeeCount, totalGross, totalNet, hpd]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        companyId:
+          $ref: '#/components/schemas/Id'
+        periodYm:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          example: '2026-11'
+        status:
+          $ref: '#/components/schemas/PeriodStatus'
+        employeeCount:
+          type: integer
+        totalGross:
+          $ref: '#/components/schemas/Money'
+        totalNet:
+          $ref: '#/components/schemas/Money'
+        hpd:
+          $ref: '#/components/schemas/DecimalString'
+          description: 期间计薪天数参数，默认 21.75
+
+    PeriodCreateRequest:
+      type: object
+      required: [periodYm]
+      properties:
+        companyId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 缺省取当前用户所属主体
+        periodYm:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          example: '2026-11'
+
+    GenerateResult:
+      type: object
+      required: [runId]
+      properties:
+        runId:
+          $ref: '#/components/schemas/Id'
+
+    RunError:
+      type: object
+      required: [empNo, message]
+      properties:
+        empNo:
+          type: string
+          maxLength: 32
+          example: E001
+        message:
+          type: string
+          example: 该员工本月已在『上海分公司』的工资表中
+
+    RunProgress:
+      type: object
+      required: [status, total, success, failed, errors]
+      properties:
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        total:
+          type: integer
+          description: 应生成人数
+        success:
+          type: integer
+        failed:
+          type: integer
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunError'
+        skipped:
+          type: object
+          description: 被跳过的人员，键为工号，值为原因（如“未配置薪酬档案”）
+          additionalProperties:
+            type: string
+          example:
+            E999: 未配置薪酬档案
+
+    # ---------------------------------------------------------------
+    # 编制台
+    # ---------------------------------------------------------------
+    GridPeriod:
+      type: object
+      required: [id, periodYm, status]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        periodYm:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+        status:
+          $ref: '#/components/schemas/PeriodStatus'
+
+    GridColumn:
+      type: object
+      description: 工资表动态列，由工资项字典驱动
+      required: [itemCode, itemName, category, direction, scale, editable]
+      properties:
+        itemCode:
+          type: string
+          maxLength: 32
+          example: PERF_BONUS
+        itemName:
+          type: string
+          maxLength: 64
+          example: 绩效奖金
+        category:
+          $ref: '#/components/schemas/PayItemCategory'
+        direction:
+          $ref: '#/components/schemas/PayDirection'
+        scale:
+          type: integer
+          format: int32
+          description: 显示小数位数
+        editable:
+          type: boolean
+
+    GridRow:
+      type: object
+      description: 一条核算记录的完整行；items 只包含该员工本期有明细的工资项
+      required:
+        [recordId, version, employeeId, empNo, empName, deptId, deptName,
+         employeeType, jobLevel, seniorityYears, grossAmount, deductionAmount,
+         netAmount, items]
+      properties:
+        recordId:
+          $ref: '#/components/schemas/Id'
+        version:
+          type: integer
+          format: int32
+          description: 乐观锁版本号，保存 changeset 时必须原样带回
+          example: 0
+        employeeId:
+          $ref: '#/components/schemas/Id'
+        empNo:
+          type: string
+          maxLength: 32
+        empName:
+          type: string
+          maxLength: 64
+        deptId:
+          $ref: '#/components/schemas/Id'
+        deptName:
+          type: string
+          maxLength: 64
+        employeeType:
+          $ref: '#/components/schemas/EmployeeType'
+        jobLevel:
+          type: string
+          nullable: true
+          maxLength: 32
+        seniorityYears:
+          $ref: '#/components/schemas/DecimalString'
+        grossAmount:
+          $ref: '#/components/schemas/Money'
+        deductionAmount:
+          $ref: '#/components/schemas/Money'
+        netAmount:
+          $ref: '#/components/schemas/Money'
+        items:
+          type: object
+          description: 键为 itemCode，值为字符串金额
+          additionalProperties:
+            $ref: '#/components/schemas/Money'
+          example:
+            BASE_SALARY: '8000.00'
+            SENIORITY_PAY: '600.00'
+
+    GridResponse:
+      type: object
+      required: [period, columns, rows, total]
+      properties:
+        period:
+          $ref: '#/components/schemas/GridPeriod'
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/GridColumn'
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/GridRow'
+        total:
+          type: integer
+          description: 行数（非分页，等于 rows.length）
+
+    ChangesetItem:
+      type: object
+      required: [itemCode, amount]
+      properties:
+        itemCode:
+          type: string
+          maxLength: 32
+          example: PERF_BONUS
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    ChangesetChange:
+      type: object
+      required: [recordId, version, items]
+      properties:
+        recordId:
+          $ref: '#/components/schemas/Id'
+        version:
+          type: integer
+          format: int32
+          description: 该行当前版本号（来自 grid 响应）
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ChangesetItem'
+
+    ChangesetRequest:
+      type: object
+      required: [changes]
+      properties:
+        changes:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ChangesetChange'
+
+    ChangesetResult:
+      type: object
+      description: 保存成功后返回受影响行（含新的 version 与重算后的合计）
+      required: [updated, rows]
+      properties:
+        updated:
+          type: integer
+          description: 受影响行数
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/GridRow'
+
+    ConflictItem:
+      type: object
+      required: [recordId]
+      properties:
+        recordId:
+          $ref: '#/components/schemas/Id'
+
+    ChangesetConflicts:
+      type: object
+      required: [conflicts]
+      properties:
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConflictItem'
+
+    UnlockRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: 解锁原因，必填，写入审计
+
+    # ---------------------------------------------------------------
+    # 导入（M2）
+    # ---------------------------------------------------------------
+    ImportError:
+      type: object
+      required: [rowNo, errorCode, errorMsg]
+      properties:
+        rowNo:
+          type: integer
+          description: Excel 行号
+        columnName:
+          type: string
+          nullable: true
+        rawValue:
+          type: string
+          nullable: true
+        errorCode:
+          type: string
+          maxLength: 32
+        errorMsg:
+          type: string
+          maxLength: 255
+
+    ImportValidateResult:
+      type: object
+      required: [batchId, totalRows, successRows, failRows, status, errors]
+      properties:
+        batchId:
+          $ref: '#/components/schemas/Id'
+        totalRows:
+          type: integer
+        successRows:
+          type: integer
+        failRows:
+          type: integer
+        status:
+          $ref: '#/components/schemas/ImportBatchStatus'
+        errors:
+          type: array
+          description: 仅保留前 5000 条错误
+          items:
+            $ref: '#/components/schemas/ImportError'
+
+    ImportCommitResult:
+      type: object
+      required: [batchId, status, successRows, failRows]
+      properties:
+        batchId:
+          $ref: '#/components/schemas/Id'
+        status:
+          $ref: '#/components/schemas/ImportBatchStatus'
+        successRows:
+          type: integer
+        failRows:
+          type: integer
+
+    # ---------------------------------------------------------------
+    # 报表（M2）
+    # ---------------------------------------------------------------
+    MonthlyReportRow:
+      type: object
+      required:
+        [companyId, periodYm, deptId, employeeCount, grossAmount,
+         deductionAmount, netAmount]
+      properties:
+        companyId:
+          $ref: '#/components/schemas/Id'
+        periodYm:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+        deptId:
+          $ref: '#/components/schemas/Id'
+        employeeCount:
+          type: integer
+        grossAmount:
+          $ref: '#/components/schemas/Money'
+        deductionAmount:
+          $ref: '#/components/schemas/Money'
+        netAmount:
+          $ref: '#/components/schemas/Money'
+
+    AnnualReportRow:
+      type: object
+      required:
+        [year, groupBy, employeeCount, grossAmount, deductionAmount, netAmount]
+      properties:
+        year:
+          type: string
+          pattern: '^[0-9]{4}$'
+          example: '2026'
+        groupBy:
+          $ref: '#/components/schemas/ReportGroupBy'
+        deptId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        deptName:
+          type: string
+          nullable: true
+        employeeId:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: groupBy=EMP 时有值
+        empNo:
+          type: string
+          nullable: true
+        empName:
+          type: string
+          nullable: true
+        employeeCount:
+          type: integer
+        grossAmount:
+          $ref: '#/components/schemas/Money'
+        deductionAmount:
+          $ref: '#/components/schemas/Money'
+        netAmount:
+          $ref: '#/components/schemas/Money'
+
+    # ---------------------------------------------------------------
+    # 统一响应包的具体类型
+    # ---------------------------------------------------------------
+    ResultLogin:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/LoginResponse'
+
+    ResultCurrentUser:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/CurrentUser'
+
+    ResultCompanyList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Company'
+
+    ResultDeptList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Dept'
+
+    ResultEmployeePage:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/EmployeePage'
+
+    ResultEmployee:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/Employee'
+
+    ResultCompProfileList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompProfile'
+
+    ResultCompProfile:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/CompProfile'
+
+    ResultPayItemList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PayItem'
+
+    ResultPayItem:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/PayItem'
+
+    ResultPeriodList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Period'
+
+    ResultPeriod:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/Period'
+
+    ResultGenerate:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/GenerateResult'
+
+    ResultRunProgress:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/RunProgress'
+
+    ResultGrid:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/GridResponse'
+
+    ResultChangeset:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/ChangesetResult'
+
+    ResultChangesetConflict:
+      type: object
+      description: |
+        保存冲突响应（code 固定 409）。
+        版本冲突时 `data.conflicts[].recordId` 列出全部冲突项；
+        期间已锁定时 `data` 为 null，`msg` 说明原因。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          enum: [409]
+          example: 409
+        msg:
+          type: string
+          example: 数据已被他人修改，请刷新
+        data:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ChangesetConflicts'
+
+    ResultImportValidate:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/ImportValidateResult'
+
+    ResultImportCommit:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/ImportCommitResult'
+
+    ResultMonthlyReport:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonthlyReportRow'
+
+    ResultAnnualReport:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnnualReportRow'

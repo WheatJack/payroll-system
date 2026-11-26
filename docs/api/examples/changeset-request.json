@@ -1,0 +1,6 @@
+{
+  "changes": [
+    { "recordId": "101", "version": 0,
+      "items": [ { "itemCode": "PERF_BONUS", "amount": "2000.00" } ] }
+  ]
+}
