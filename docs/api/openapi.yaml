@@ -9,15 +9,28 @@ info:
 
     1. **统一前缀**：所有端点以 `/api/v1` 开头。
     2. **统一响应包**：`{ "code": number, "msg": string, "data": T }`，`code = 0` 表示成功。
-       错误响应使用同一响应包，`code` 非 0（见 `ErrorCode`）：
-       `400` 参数校验失败 / `401` 未认证 / `403` 无权限 /
-       `409` 冲突（重复、版本冲突、期间已锁定）/ `500` 服务端错误。
+       错误响应使用同一响应包，`code` 非 0（见 `ErrorCode`）。
+
+    ## 错误传输约定（R8）
+
+    - **HTTP 状态码是权威**：`400` 参数校验失败 / `401` 未认证 / `403` 无权限 /
+      `409` 冲突（重复数据、版本冲突、期间已锁定）/ `500` 系统异常。
+      后端必须返回真实的 HTTP 状态码，**禁止**“HTTP 200 + body.code=4xx/5xx”的写法。
+    - 错误 body 仍为统一响应包 `{code, msg, data}`，且 **`code` 与 HTTP 状态码相同**。
+    - `409` 的 `data` 约定：
+      - **版本冲突**（`PATCH /api/v1/periods/{id}/records`）：
+        `data.conflicts` 为 `[{ "recordId": "101" }]`，列出全部冲突行，前端据此高亮；
+      - **期间已锁定 / 重复数据等其它冲突**：`data` 为 `null`，`msg` 说明原因。
+
+    ## 其余全局约定
+
     3. **金额一律字符串**：所有金额字段为十进制字符串（如 `"8600.00"`），
        **不允许 JSON number**。前端必须用 decimal.js 运算，禁止 `Number()` / `parseFloat`。
-       前端据此保证 `合计 === 明细加总`，不做二次舍入。
+       明细金额恒为非负数；`gross = Σ(direction=1)`，`deduction = Σ(direction=2)`，
+       `net = gross − deduction`（见 `PayDirection` / `GridRow.items`）。
     4. **ID 一律字符串**：后端把 `Long` 序列化为字符串，所有 `id` / `*Id` 字段
        在 JSON 中都是字符串（如 `"101"`）。`version` 是乐观锁版本号（DB `INT`，
-       JSON 中为整数），不是 Long。
+       JSON 中为整数），不是 Long；**新建记录的 `version` 从 `0` 开始，每次保存 `+1`**。
     5. **分页参数**：`current` 从 1 开始，`size` 为每页条数；分页响应为
        `{ records, total, current, size }`。
     6. **枚举**：
@@ -1052,7 +1065,7 @@ components:
     Money:
       type: string
       format: decimal
-      description: 金额十进制字符串，禁止使用 JSON number；展示统一 2 位小数
+      description: 金额十进制字符串，禁止使用 JSON number；展示保留两位小数，实际精度 DECIMAL(18,4)
       pattern: '^-?[0-9]{1,14}(\.[0-9]{1,4})?$'
       example: '8600.00'
 
@@ -1105,7 +1118,11 @@ components:
 
     PayDirection:
       type: integer
-      description: 工资项方向：1 增加（收入），2 减少（扣款）
+      description: |
+        工资项方向：`1` 增加（收入），`2` 减少（扣款）。
+        明细金额（`items` 的值）恒为非负数，方向只由该字段表达；
+        汇总口径：`gross = Σ(direction=1)`，`deduction = Σ(direction=2)`，
+        `net = gross − deduction`。
       enum: [1, 2]
 
     PayItemDataType:
@@ -1258,7 +1275,7 @@ components:
       description: 人员详情。证件号/手机号只返回掩码，不返回明文。
       required:
         [id, companyId, empNo, name, gender, idType, idNoMask, employeeType,
-         deptId, hireDate, status]
+         deptId, deptName, hireDate, status]
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -1302,6 +1319,10 @@ components:
           maxLength: 64
         deptId:
           $ref: '#/components/schemas/Id'
+        deptName:
+          type: string
+          maxLength: 64
+          description: 部门名称，只读（后端按 deptId 关联返回），不接受写入
         hireDate:
           type: string
           format: date
@@ -1702,6 +1723,26 @@ components:
         hpd:
           $ref: '#/components/schemas/DecimalString'
           description: 期间计薪天数参数，默认 21.75
+        compiledBy:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 最后编制人用户 ID（锁定内控：锁定人不能等于编制人）
+        lockedBy:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+          description: 锁定人用户 ID；未锁定为 null
+        lockedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 锁定时间；未锁定为 null
+        unlockReason:
+          type: string
+          nullable: true
+          maxLength: 255
+          description: 最近一次解锁原因；未解锁过为 null
 
     PeriodCreateRequest:
       type: object
@@ -1813,7 +1854,7 @@ components:
         version:
           type: integer
           format: int32
-          description: 乐观锁版本号，保存 changeset 时必须原样带回
+          description: 乐观锁版本号，新建记录从 `0` 开始、每次保存 `+1`；保存 changeset 时必须原样带回
           example: 0
         employeeId:
           $ref: '#/components/schemas/Id'
@@ -1844,7 +1885,11 @@ components:
           $ref: '#/components/schemas/Money'
         items:
           type: object
-          description: 键为 itemCode，值为字符串金额
+          description: |
+            键为 `itemCode`，值为字符串金额，且恒为非负数（方向由列定义的 `direction` 表达）。
+            该行有明细的工资项才会出现；键必然在 `columns[].itemCode` 之内。
+            汇总口径：`grossAmount = Σ(direction=1 的 items)`，
+            `deductionAmount = Σ(direction=2 的 items)`，`netAmount = grossAmount − deductionAmount`。
           additionalProperties:
             $ref: '#/components/schemas/Money'
           example:
@@ -1853,6 +1898,11 @@ components:
 
     GridResponse:
       type: object
+      description: |
+        `columns` 覆盖该主体**全部启用科目**（按 `sortNo` 排序），是本期间工资表的完整列集合；
+        `items` 的键必然在 `columns[].itemCode` 之内。
+        `docs/api/examples/grid-response.json` 是为篇幅截断的示例（只展示 2 列），
+        不代表真实响应只会返回 2 列——前端必须完全按 `columns` 动态渲染。
       required: [period, columns, rows, total]
       properties:
         period:
@@ -1889,7 +1939,7 @@ components:
         version:
           type: integer
           format: int32
-          description: 该行当前版本号（来自 grid 响应）
+          description: 该行当前版本号（来自 grid 响应；新建记录从 `0` 开始、每次保存 `+1`）
         items:
           type: array
           minItems: 1
