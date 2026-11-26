@@ -15,6 +15,7 @@ const router = useRouter()
 const canEdit = computed(() => auth.has('payroll:record:edit'))
 const canLock = computed(() => auth.has('payroll:period:lock'))
 const canUnlock = computed(() => auth.has('payroll:period:unlock'))
+const canImport = computed(() => auth.has('payroll:import:submit'))
 
 const STATUS_META: Record<PeriodStatus, { label: string; type: 'info' | 'primary' | 'success' | 'warning' | 'danger' }> = {
   DRAFT: { label: '草稿', type: 'info' },
@@ -204,6 +205,10 @@ function openGrid(period: Period) {
   void router.push({ name: 'payroll-grid', params: { id: period.id } })
 }
 
+function openImport(period: Period) {
+  void router.push({ name: 'period-import', params: { id: period.id } })
+}
+
 function canGenerate(period: Period): boolean {
   return canEdit.value && (period.status === 'DRAFT' || period.status === 'EDITING')
 }
@@ -251,6 +256,9 @@ onMounted(load)
         <template #default="{ row }">
           <el-button link type="primary" @click="openGrid(row)">编制台</el-button>
           <el-button v-if="canGenerate(row)" link type="primary" @click="generate(row)">生成</el-button>
+          <el-button v-if="canImport && row.status === 'EDITING'" link type="primary" @click="openImport(row)">
+            导入
+          </el-button>
           <el-button v-if="canLock && row.status === 'EDITING'" link type="warning" @click="lock(row)">锁定</el-button>
           <el-button v-if="canUnlock && row.status === 'LOCKED'" link type="danger" @click="openUnlock(row)">
             解锁

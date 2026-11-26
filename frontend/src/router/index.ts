@@ -43,6 +43,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '编制台', perm: 'payroll:record:view' },
       },
       {
+        path: 'periods/:id/import',
+        name: 'period-import',
+        component: () => import('@/views/period/ImportWizard.vue'),
+        meta: { title: '导入工资数据', perm: 'payroll:import:submit' },
+      },
+      {
         path: 'reports/monthly',
         name: 'report-monthly',
         component: () => import('@/views/report/MonthlyReportView.vue'),
