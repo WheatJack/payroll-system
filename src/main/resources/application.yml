@@ -40,6 +40,9 @@ payroll:
     # 生产环境必须通过环境变量注入，无默认值兜底
     id-no-salt: ${PAYROLL_ID_SALT}
     aes-key: ${PAYROLL_AES_KEY}
+    # 无状态 token 的 HMAC 密钥；轮换后所有已签发 token 立即失效
+    token-secret: ${PAYROLL_TOKEN_SECRET}
+    token-ttl-minutes: 720
   import:
     max-rows: 50000
     max-error-rows: 5000
