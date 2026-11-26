@@ -50,7 +50,9 @@ info:
         JSON 统一响应包**，`code` 与 HTTP 状态码一致。其余端点一律使用统一响应包。
     11. **权限点**：功能权限点清单见 `PermissionCode`。
         系统管理新增 `sys:user:view` / `sys:user:edit` / `sys:role:view` /
-        `sys:role:edit` / `sys:dept:edit` / `sys:company:edit`。
+        `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit`。
+        任何授权操作都不得超出操作者自身的权限点与数据范围（越权返回 403）；
+        `dataScope=ALL` 只能由持有 `sys:role:grant:all` 的操作者授予。
   contact:
     name: 工资核算系统
 tags:
@@ -78,7 +80,7 @@ tags:
     description: |
       M1.5 能力：用户、角色、部门、法人主体管理。
       权限点：`sys:user:view` / `sys:user:edit` / `sys:role:view` /
-      `sys:role:edit` / `sys:dept:edit` / `sys:company:edit`。
+      `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit`。
 security:
   - bearerAuth: []
 servers:
@@ -801,7 +803,7 @@ paths:
     get:
       tags: [导入]
       summary: 下载导入模板
-      description: 列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
+      description: 需要 `payroll:import:submit`。列头由工资项字典动态生成。返回二进制 xlsx，不使用统一响应包。
       operationId: downloadImportTemplate
       x-milestone: M1.5
       parameters:
@@ -841,7 +843,7 @@ paths:
     post:
       tags: [导入]
       summary: 上传并预校验
-      description: 只预校验不落库；返回批次号、成功/失败行数与错误明细。
+      description: 需要 `payroll:import:submit`。只预校验不落库；返回批次号、成功/失败行数与错误明细。
       operationId: validateImport
       x-milestone: M1.5
       requestBody:
@@ -880,11 +882,42 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/v1/import/{batchId}:
+    get:
+      tags: [导入]
+      summary: 查询导入批次
+      description: |
+        需要 `payroll:import:submit`。刷新页面后回捞批次状态与错误明细；
+        `status=VALIDATING` 时可轮询本接口获取进度。
+      operationId: getImportBatch
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/BatchIdPath'
+      responses:
+        '200':
+          description: 批次详情（含错误明细，最多 5000 条）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportValidate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /api/v1/import/{batchId}/commit:
     post:
       tags: [导入]
       summary: 确认提交导入
-      description: 事务内 upsert 并生成核算明细。已提交过的文件 hash 会被拒绝（409）。
+      description: |
+        需要 `payroll:import:submit`。事务内 upsert 并生成核算明细。
+        已提交过的文件 hash 会被拒绝（409）。
+        **`failRows > 0` 时禁止提交**：返回 409 且 `data.failRows` 为失败行数，
+        必须重新校验到 0 失败后才可提交（不能只靠前端置灰）。
       operationId: commitImport
       x-milestone: M1.5
       parameters:
@@ -903,7 +936,11 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: 预校验存在失败行（`data.failRows` 给出数量）或文件已提交
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportCommitConflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -911,7 +948,9 @@ paths:
     get:
       tags: [导入]
       summary: 下载错误报告
-      description: 返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
+      description: |
+        需要 `payroll:export`（错误报告含工资金额，与导出同级）。
+        返回二进制 xlsx（行号 + 列名 + 原因 + 原值），不使用统一响应包。
       operationId: downloadImportErrors
       x-milestone: M1.5
       parameters:
@@ -942,7 +981,10 @@ paths:
     get:
       tags: [报表]
       summary: 月度汇总
-      description: 按部门汇总的月度数据；仅统计已锁定及以后期间。
+      description: |
+        需要 `payroll:record:view`。按部门汇总的月度数据；仅统计 `LOCKED` 与
+        `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
+        `COMPANY`/`ALL`）过滤。
       operationId: getMonthlyReport
       x-milestone: M1.5
       parameters:
@@ -982,7 +1024,10 @@ paths:
     get:
       tags: [报表]
       summary: 年度汇总
-      description: 按人或按部门汇总的年度数据；仅统计 `LOCKED` 及以后期间。
+      description: |
+        需要 `payroll:record:view`。按人或按部门汇总的年度数据；仅统计 `LOCKED` 与
+        `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
+        `COMPANY`/`ALL`）过滤。
       operationId: getAnnualReport
       x-milestone: M1.5
       parameters:
@@ -1037,6 +1082,10 @@ paths:
         文件名由 `Content-Disposition: attachment` 给出（含报表类型、期间与时间戳）。
         失败时（`400`/`401`/`403`/`500`）**仍返回 JSON 统一响应包** `{code,msg,data}`，
         `code` 与 HTTP 状态码一致。
+
+        **前端判据**：按 HTTP 状态码判断成功与否——`200` 即二进制流
+        （`Content-Type` 为 xlsx）；失败响应的 `Content-Type` 为 `application/json`，
+        按统一响应包解析错误。
       operationId: exportReport
       x-milestone: M1.5
       requestBody:
@@ -1200,14 +1249,43 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [系统管理]
+      summary: 删除用户
+      description: |
+        需要 `sys:user:edit`。逻辑删除（`deleted=1`），历史审计与工资记录保留；
+        不能删除自己（409）。删除账号不删除其关联的人员主数据。
+      operationId: deleteUser
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 删除成功，`data` 为 null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /api/v1/users/{id}/reset-password:
     post:
       tags: [系统管理]
       summary: 重置密码
       description: |
-        需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效，
-        该用户已签发的 token 全部作废；新密码不会在响应中回显。
+        需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效；
+        该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上由后端
+        新增 `sys_user.pwd_changed_at` 列，与 token 签发时间比对后判定失效。
+        新密码不会在响应中回显。
       operationId: resetUserPassword
       x-milestone: M1.5
       parameters:
@@ -1227,6 +1305,29 @@ paths:
                 $ref: '#/components/schemas/ResultUser'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/permissions:
+    get:
+      tags: [系统管理]
+      summary: 权限点目录
+      description: |
+        需要 `sys:role:view`。返回全部功能权限点及其名称与所属模块，
+        供角色授权页勾选，避免前端硬编码权限点列表。
+      operationId: listPermissions
+      x-milestone: M1.5
+      responses:
+        '200':
+          description: 权限点目录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultPermissionList'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1274,7 +1375,8 @@ paths:
       summary: 新增角色
       description: |
         需要 `sys:role:edit`。`roleCode` 在同一主体内唯一，重复返回 409。
-        `dataScope` 只能授予当前操作者自身的数据范围或更窄者（不可越权放大）。
+        `dataScope` 不得宽于操作者自身；授予 `ALL` 需额外持有 `sys:role:grant:all`；
+        授予的权限点必须是操作者自身权限点的子集。越权返回 403。
       operationId: createRole
       x-milestone: M1.5
       requestBody:
@@ -1305,7 +1407,10 @@ paths:
     put:
       tags: [系统管理]
       summary: 修改角色
-      description: 需要 `sys:role:edit`。只提交需要修改的字段；权限点用 `/roles/{id}/grants` 单独维护。
+      description: |
+        需要 `sys:role:edit`。只提交需要修改的字段；权限点用 `/roles/{id}/grants` 单独维护。
+        **防自我提权**：新 `dataScope` 不得宽于操作者当前数据范围；改为 `ALL` 需额外持有
+        `sys:role:grant:all`。越权尝试返回 403。
       operationId: updateRole
       x-milestone: M1.5
       parameters:
@@ -1333,6 +1438,33 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [系统管理]
+      summary: 删除角色
+      description: |
+        需要 `sys:role:edit`。逻辑删除（`deleted=1`），权限点与授予关系一并失效；
+        仍有用户关联该角色时返回 409，需先将用户改授其它角色。
+      operationId: deleteRole
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 删除成功，`data` 为 null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /api/v1/roles/{id}/grants:
     put:
@@ -1341,6 +1473,9 @@ paths:
       description: |
         需要 `sys:role:edit`。**全量替换**该角色的权限点集合（先删后插，事务内完成）；
         传空数组即清空。权限点取值见 `PermissionCode`。
+        **防自我提权**：提交的权限点必须是操作者自身权限点的子集；包含
+        `payroll:export`、`payroll:sensitive:view`、`sys:role:grant:all` 等
+        操作者未持有的权限点即越权，返回 403。
       operationId: replaceRoleGrants
       x-milestone: M1.5
       parameters:
@@ -1391,6 +1526,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResultDept'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [系统管理]
+      summary: 删除部门
+      description: |
+        需要 `sys:dept:edit`。逻辑删除（`deleted=1`）；
+        存在启用下级部门或关联人员/用户时返回 409，需先迁移或停用下级。
+      operationId: deleteDept
+      x-milestone: M1.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 删除成功，`data` 为 null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1562,13 +1724,29 @@ components:
     PermissionCode:
       type: string
       description: |
-        功能权限点。取值：
+        功能权限点。`sys:role:grant:all` 是唯一允许授予 `dataScope=ALL` 的权限点，
+        且授权者必须自身也持有该权限点。
         - 核算：`payroll:record:view`、`payroll:record:edit`
         - 期间：`payroll:period:lock`、`payroll:period:unlock`
         - 导入导出：`payroll:import:submit`、`payroll:export`
         - 敏感字段：`payroll:sensitive:view`
         - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
-          `sys:role:edit`、`sys:dept:edit`、`sys:company:edit`
+          `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`
+      enum:
+        - 'payroll:record:view'
+        - 'payroll:record:edit'
+        - 'payroll:period:lock'
+        - 'payroll:period:unlock'
+        - 'payroll:import:submit'
+        - 'payroll:export'
+        - 'payroll:sensitive:view'
+        - 'sys:user:view'
+        - 'sys:user:edit'
+        - 'sys:role:view'
+        - 'sys:role:edit'
+        - 'sys:role:grant:all'
+        - 'sys:dept:edit'
+        - 'sys:company:edit'
       maxLength: 64
       example: sys:user:view
 
@@ -2571,6 +2749,9 @@ components:
           pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
         deptId:
           $ref: '#/components/schemas/Id'
+        deptName:
+          type: string
+          nullable: true
         employeeCount:
           type: integer
         grossAmount:
@@ -2656,6 +2837,21 @@ components:
     # ---------------------------------------------------------------
     # 系统管理（M1.5）
     # ---------------------------------------------------------------
+    PermissionItem:
+      type: object
+      required: [code, name, module]
+      properties:
+        code:
+          $ref: '#/components/schemas/PermissionCode'
+        name:
+          type: string
+          maxLength: 64
+          example: 查看核算
+        module:
+          type: string
+          description: 所属模块
+          enum: [PAYROLL, SYS]
+
     User:
       type: object
       description: 系统用户。密码哈希永不返回；手机号只返回掩码。
@@ -2749,11 +2945,6 @@ components:
           type: string
           nullable: true
           pattern: '^[0-9]+$'
-        mobile:
-          type: string
-          nullable: true
-          maxLength: 20
-          description: 手机号明文，后端加密存储并只回显掩码
         status:
           type: integer
           enum: [0, 1]
@@ -2780,10 +2971,6 @@ components:
           type: string
           nullable: true
           pattern: '^[0-9]+$'
-        mobile:
-          type: string
-          nullable: true
-          maxLength: 20
         status:
           type: integer
           enum: [0, 1]
@@ -2802,7 +2989,7 @@ components:
           format: password
           minLength: 8
           maxLength: 128
-          description: 重置后旧密码立即失效，该用户已签发的 token 全部作废
+          description: 重置后旧密码立即失效；该用户下次请求需重新登录（比对 `pwd_changed_at`）
 
     Role:
       type: object
@@ -3228,6 +3415,32 @@ components:
         data:
           $ref: '#/components/schemas/ImportCommitResult'
 
+    ResultImportCommitConflict:
+      type: object
+      description: |
+        提交冲突（code 固定 409）。预校验 `failRows > 0` 时 `data.failRows` 给出失败行数；
+        文件已提交或其它冲突时 `data` 为 null。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          enum: [409]
+          example: 409
+        msg:
+          type: string
+          example: 预校验存在 3 行失败，禁止提交
+        data:
+          type: object
+          nullable: true
+          description: 失败行数；其它冲突时为 null
+          required: [batchId, failRows]
+          properties:
+            batchId:
+              $ref: '#/components/schemas/Id'
+            failRows:
+              type: integer
+              minimum: 1
+
     ResultMonthlyReport:
       type: object
       required: [code, msg, data]
@@ -3329,3 +3542,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Role'
+
+    ResultPermissionList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionItem'
