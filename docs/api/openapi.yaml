@@ -859,6 +859,8 @@ paths:
         `pay_import_error` 与原始文件，保证刷新后可回捞 batchId 与错误明细、
         也可按批次重放。提交时按批次重放并**重新校验**。
         返回批次号、成功/失败行数与错误明细。
+        同一 `(periodId, bizType, fileHash)` 已有批次时拒绝重复上传（409），
+        由 `UNIQUE(period_id, biz_type, file_hash)` 兜底并发竞态。
       operationId: validateImport
       x-milestone: M1.5
       requestBody:
@@ -872,7 +874,7 @@ paths:
                 file:
                   type: string
                   format: binary
-                  description: xlsx 文件，≤ 10MB、≤ 5 万行
+                  description: xlsx 文件，≤ 50MB、≤ 5 万行
                 periodId:
                   $ref: '#/components/schemas/Id'
                 bizType:
@@ -1315,8 +1317,9 @@ paths:
       summary: 重置密码
       description: |
         需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效；
-        该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上由后端
-        新增 `sys_user.pwd_changed_at` 列，与 token 签发时间比对后判定失效。
+        该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上
+        token 载荷内含 `tokenVersion`，每次请求与 `sys_user.token_version` 现查比对；
+        重置密码时该用户 `token_version + 1`，旧 token 即全部失效。
         新密码不会在响应中回显。
       operationId: resetUserPassword
       x-milestone: M1.5
@@ -3049,7 +3052,7 @@ components:
           format: password
           minLength: 8
           maxLength: 128
-          description: 重置后旧密码立即失效；该用户下次请求需重新登录（比对 `pwd_changed_at`）
+          description: 重置后旧密码立即失效；该用户下次请求需重新登录（token 内含版本号，每请求比对 `sys_user.token_version`，重置时 +1）
 
     Role:
       type: object
