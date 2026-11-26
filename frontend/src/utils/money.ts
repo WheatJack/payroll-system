@@ -118,3 +118,14 @@ export function format(value: string): string {
 
 /** 统一的 0 值。 */
 export const ZERO: Money = '0.00'
+
+/**
+ * 清洗用户输入或 Excel 粘贴的金额文本（剔除货币符号、千分位、空白），
+ * 合法则返回金额字符串，非法返回 null。仅做字符串清洗，不做数值转换。
+ */
+export function coerce(value: string): string | null {
+  if (typeof value !== 'string') return null
+  const cleaned = value.replace(/[,\s￥¥$]/g, '').replace(/^\+/, '')
+  if (cleaned === '') return null
+  return MONEY_PATTERN.test(cleaned) ? cleaned : null
+}
