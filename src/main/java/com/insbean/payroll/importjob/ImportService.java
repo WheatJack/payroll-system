@@ -30,8 +30,13 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -71,7 +76,6 @@ public class ImportService {
     private static final String STATUS_COMMITTED = "COMMITTED";
     private static final String SOURCE_IMPORT = "IMPORT";
     private static final String MODE_UPSERT = "UPSERT";
-    private static final String MODE_APPEND = "APPEND";
     private static final String MODE_INSERT_ONLY = "INSERT_ONLY";
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss").withZone(ZoneId.systemDefault());
@@ -87,6 +91,7 @@ public class ImportService {
     private final AuditService auditService;
     private final DataScopeEnforcer dataScope;
     private final ExcelWriter excelWriter;
+    private final TransactionTemplate transactionTemplate;
     private final Path storageDir;
     private final int maxRows;
     private final int maxErrorRows;
@@ -102,6 +107,7 @@ public class ImportService {
                          AuditService auditService,
                          DataScopeEnforcer dataScope,
                          ExcelWriter excelWriter,
+                         PlatformTransactionManager transactionManager,
                          @Value("${payroll.storage.local-path:./data/import}") String storagePath,
                          @Value("${payroll.import.max-rows:50000}") int maxRows,
                          @Value("${payroll.import.max-error-rows:5000}") int maxErrorRows) {
@@ -116,6 +122,7 @@ public class ImportService {
         this.auditService = auditService;
         this.dataScope = dataScope;
         this.excelWriter = excelWriter;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.storageDir = Path.of(storagePath).toAbsolutePath().normalize();
         this.maxRows = maxRows;
         this.maxErrorRows = maxErrorRows;
@@ -184,21 +191,12 @@ public class ImportService {
             file.transferTo(temp.toFile());
             String hash = sha256(temp);
 
-            Long duplicate = batchMapper.findDuplicate(periodId, hash);
-            if (duplicate != null) {
-                throw new BizException(409, "该文件已上传过（批次 " + duplicate + "），不能重复导入");
-            }
-
             Files.createDirectories(storageDir);
             stored = storageDir.resolve(hash + ".xlsx");
             Files.copy(temp, stored, StandardCopyOption.REPLACE_EXISTING);
 
-            ImportValidator.Result result = validator.validate(stored, periodId, period.getCompanyId(),
-                    category, maxRows, maxErrorRows);
-            if (result.totalRows() == 0) {
-                throw new BizException(400, "文件没有数据行");
-            }
-
+            // 幂等第一步就是插批次行：靠唯一键 (period_id, biz_type, file_hash) 拦住并发上传。
+            // "先查后插"存在 TOCTOU——两个请求会同时查不到，然后同时插成功。
             ImportBatchEntity batch = new ImportBatchEntity();
             batch.setPeriodId(periodId);
             batch.setBizType(category);
@@ -206,15 +204,30 @@ public class ImportService {
             batch.setFileHash(hash);
             batch.setFilePath(stored.toString());
             batch.setImportMode(mode);
-            batch.setTotalRows(result.totalRows());
-            batch.setSuccessRows(result.rows().size());
-            batch.setFailRows(result.failRows());
+            batch.setTotalRows(0);
+            batch.setSuccessRows(0);
+            batch.setFailRows(0);
             batch.setStatus(STATUS_VALIDATING);
             batch.setOperatorId(requireUser().userId());
             batch.setCreatedAt(LocalDateTime.now());
-            batchMapper.insert(batch);
+            try {
+                batchMapper.insert(batch);
+            } catch (DuplicateKeyException e) {
+                throw new BizException(409, "该文件已提交或正在处理，请勿重复导入");
+            }
+            // 校验失败会回滚事务（批次行随之消失），原始文件必须跟着清理
+            registerRollbackFileCleanup(stored);
+
+            ImportValidator.Result result = validator.validate(stored, periodId, period.getCompanyId(),
+                    category, maxRows, maxErrorRows);
+            if (result.totalRows() == 0) {
+                throw new BizException(400, "文件没有数据行");
+            }
 
             persistErrors(batch.getId(), result.errors());
+            batch.setTotalRows(result.totalRows());
+            batch.setSuccessRows(result.rows().size());
+            batch.setFailRows(result.failRows());
             batch.setStatus(STATUS_VALIDATED);
             batch.setFinishedAt(LocalDateTime.now());
             batchMapper.updateById(batch);
@@ -231,23 +244,80 @@ public class ImportService {
         }
     }
 
+    /**
+     * 事务回滚时清理原始文件。
+     *
+     * <p>存储路径按内容 hash 命名，同一份文件可能被别的期间/业务类型引用，
+     * 因此只在"引用数 <= 1（仅有本次待回滚的批次）"时才登记删除。
+     */
+    private void registerRollbackFileCleanup(Path stored) {
+        long references = batchMapper.selectCount(Wrappers.<ImportBatchEntity>lambdaQuery()
+                .eq(ImportBatchEntity::getFilePath, stored.toString()));
+        if (references > 1) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != TransactionSynchronization.STATUS_COMMITTED) {
+                    deleteQuietly(stored);
+                }
+            }
+        });
+    }
+
     // ------------------------------------------------------------------ 查询
 
     public ImportValidateResultDTO get(Long batchId) {
         ImportBatchEntity batch = requireBatch(batchId);
         dataScope.assertPeriodVisible(batch.getPeriodId());
+        assertBatchReadable(batch);
         return toValidateResult(batch);
+    }
+
+    /**
+     * 部门级账号只能看自己发起的批次：批次本身是"整期间"的容器，
+     * 错误明细里带别部门的工号与原值，仅靠期间可见挡不住横向泄漏。
+     */
+    private void assertBatchReadable(ImportBatchEntity batch) {
+        CurrentUser current = requireUser();
+        if (DataScopeEnforcer.ALL.equals(current.dataScope())
+                || DataScopeEnforcer.COMPANY.equals(current.dataScope())) {
+            return;
+        }
+        if (!current.userId().equals(batch.getOperatorId())) {
+            throw new BizException(403, "无权查看他人发起的导入批次");
+        }
     }
 
     // ------------------------------------------------------------------ 提交
 
-    @Transactional
     public ImportCommitResultDTO commit(Long batchId) {
         ImportBatchEntity existing = requireBatch(batchId);
         dataScope.assertPeriodVisible(existing.getPeriodId());
-        // 写事务内锁期间行：预览之后被锁定的期间必须在这里被挡住
-        periodService.assertWritableForUpdate(existing.getPeriodId());
+        // 快速失败（只读）：避免为一个明显不能提交的批次去抢锁
+        if (STATUS_COMMITTED.equals(existing.getStatus())) {
+            throw new BizException(409, "该批次已提交，不能重复提交");
+        }
+        if (!STATUS_VALIDATED.equals(existing.getStatus())) {
+            throw new BizException(400, "批次状态不允许提交：" + existing.getStatus());
+        }
+        if (existing.getFailRows() != null && existing.getFailRows() > 0) {
+            throw new ImportConflictException(batchId, existing.getFailRows());
+        }
+        periodService.assertWritable(existing.getPeriodId());
 
+        try {
+            return transactionTemplate.execute(status -> applyInTransaction(batchId));
+        } catch (RevalidationFailed e) {
+            // 重新校验失败：事务已回滚，用新事务把最新错误与 failRows 刷回去。
+            // 否则前端轮询看到 failRows=0 却收到 409，根本不知道错在哪一行。
+            refreshValidationFailure(batchId, e.result);
+            throw new ImportConflictException(batchId, e.result.failRows());
+        }
+    }
+
+    private ImportCommitResultDTO applyInTransaction(Long batchId) {
         // 锁批次行，双击提交只有一次能成功
         ImportBatchEntity batch = batchMapper.selectForUpdate(batchId);
         if (batch == null) {
@@ -262,14 +332,17 @@ public class ImportService {
         if (batch.getFailRows() != null && batch.getFailRows() > 0) {
             throw new ImportConflictException(batchId, batch.getFailRows());
         }
+        // 写事务内锁期间行：预览之后被锁定的期间必须在这里被挡住
+        periodService.assertWritableForUpdate(batch.getPeriodId());
+        dataScope.assertPeriodVisible(batch.getPeriodId());
 
         PayPeriodEntity period = periodService.requirePeriod(batch.getPeriodId());
-        // 提交时重放 + 重新校验：期间状态、记录内容、科目字典都可能已经变了
+        // 提交时重放 + 重新校验：期间状态、记录内容（含数据范围）都可能已经变了
         ImportValidator.Result result = validator.validate(Path.of(batch.getFilePath()),
                 batch.getPeriodId(), period.getCompanyId(), batch.getBizType(),
                 maxRows, maxErrorRows);
         if (result.failRows() > 0) {
-            throw new ImportConflictException(batchId, result.failRows());
+            throw new RevalidationFailed(result);
         }
 
         apply(period, batch, result);
@@ -285,11 +358,38 @@ public class ImportService {
         return new ImportCommitResultDTO(batchId, STATUS_COMMITTED, result.rows().size(), 0);
     }
 
+    /** 重新校验失败的内部信号：事务需要回滚，错误刷新放到事务外的新事务里做。 */
+    private static final class RevalidationFailed extends RuntimeException {
+        private final ImportValidator.Result result;
+
+        private RevalidationFailed(ImportValidator.Result result) {
+            super("重新校验失败：" + result.failRows() + " 行");
+            this.result = result;
+        }
+    }
+
+    private void refreshValidationFailure(Long batchId, ImportValidator.Result result) {
+        transactionTemplate.executeWithoutResult(status -> {
+            ImportBatchEntity batch = batchMapper.selectById(batchId);
+            if (batch == null) {
+                return;
+            }
+            errorMapper.deleteByBatch(batchId);
+            persistErrors(batchId, result.errors());
+            batch.setTotalRows(result.totalRows());
+            batch.setSuccessRows(result.rows().size());
+            batch.setFailRows(result.failRows());
+            batch.setStatus(STATUS_VALIDATED);
+            batch.setFinishedAt(LocalDateTime.now());
+            batchMapper.updateById(batch);
+        });
+    }
+
     private void apply(PayPeriodEntity period, ImportBatchEntity batch,
                        ImportValidator.Result result) {
         for (ImportValidator.ValidatedRow row : result.rows()) {
             for (Map.Entry<String, BigDecimal> entry : row.amounts().entrySet()) {
-                upsertItem(period, batch.getImportMode(), row.recordId(),
+                upsertItem(batch.getImportMode(), row.recordId(),
                         entry.getKey(), entry.getValue(), result.itemDefs());
             }
             recalcRecord(row.recordId());
@@ -298,7 +398,13 @@ public class ImportService {
         totalsRefresher.refresh(period);
     }
 
-    private void upsertItem(PayPeriodEntity period, String mode, Long recordId,
+    /**
+     * 金额是绝对数：UPSERT 覆盖、INSERT_ONLY 跳过。
+     *
+     * <p>APPEND（累加）已下线——对绝对金额做累加等价于"再发一次"，
+     * 既绕开"每人每月一条"的唯一索引，也没有补回机制。
+     */
+    private void upsertItem(String mode, Long recordId,
                             String itemCode, BigDecimal amount,
                             Map<String, PayItemDefDTO> itemDefs) {
         PayRecordItemEntity existing = recordItemMapper.selectOne(Wrappers.<PayRecordItemEntity>lambdaQuery()
@@ -309,9 +415,7 @@ public class ImportService {
             if (MODE_INSERT_ONLY.equals(mode)) {
                 return;
             }
-            existing.setAmount(MODE_APPEND.equals(mode) && existing.getAmount() != null
-                    ? existing.getAmount().add(amount)
-                    : amount);
+            existing.setAmount(amount);
             existing.setSource(SOURCE_IMPORT);
             recordItemMapper.updateById(existing);
             return;
@@ -367,6 +471,7 @@ public class ImportService {
         }
         ImportBatchEntity batch = requireBatch(batchId);
         dataScope.assertPeriodVisible(batch.getPeriodId());
+        assertBatchReadable(batch);
 
         List<ImportErrorEntity> errors = errorMapper.selectList(
                 Wrappers.<ImportErrorEntity>lambdaQuery()
@@ -451,8 +556,10 @@ public class ImportService {
         }
         String normalized = mode.trim().toUpperCase();
         return switch (normalized) {
-            case MODE_UPSERT, MODE_APPEND, MODE_INSERT_ONLY -> normalized;
-            default -> throw new BizException(400, "importMode 只能是 UPSERT/APPEND/INSERT_ONLY：" + mode);
+            case MODE_UPSERT, MODE_INSERT_ONLY -> normalized;
+            case "APPEND" -> throw new BizException(400,
+                    "APPEND 模式已下线：变动项导入的是绝对金额，累加等于重复发薪");
+            default -> throw new BizException(400, "importMode 只能是 UPSERT 或 INSERT_ONLY：" + mode);
         };
     }
 

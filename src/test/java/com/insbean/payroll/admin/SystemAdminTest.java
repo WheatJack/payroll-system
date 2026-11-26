@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -221,7 +222,7 @@ class SystemAdminTest extends AbstractDbTest {
                 .filter(r -> r.id() == 3L).findFirst().orElseThrow().permissions()).isEmpty();
 
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM pay_audit_log WHERE biz_type = 'ROLE' AND biz_id = 3 AND action = 'UPDATE'",
+                "SELECT COUNT(*) FROM pay_audit_log WHERE biz_type = 'ROLE' AND biz_id = 3 AND action = 'GRANT_REPLACE'",
                 Integer.class)).isPositive();
     }
 
@@ -242,6 +243,95 @@ class SystemAdminTest extends AbstractDbTest {
         roleAdminService.delete(3L);
         assertThat(jdbc.queryForObject(
                 "SELECT deleted FROM sys_role WHERE id = 3", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void 分配角色也要校验权限点子集() {
+        // 操作者只有系统管理权限，没有 payroll:record:edit
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
+                Set.of("sys:user:view", "sys:user:edit", "sys:role:view", "sys:role:edit"));
+
+        assertThatThrownBy(() -> userAdminService.create(new UserCreateReq(
+                TestDb.COMPANY_DEFAULT, "newclerk", "Passw0rd!", "新同事", null, null, 1, List.of(1L))))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_user WHERE username = 'newclerk'", Integer.class)).isZero();
+    }
+
+    @Test
+    void 不能重置权限高于自己的账号密码() {
+        // 用户 2 的角色是 ALL 范围且持有 payroll:export 等权限
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "COMPANY",
+                Set.of("sys:user:view", "sys:user:edit"));
+        assertThatThrownBy(() -> userAdminService.resetPassword(2L, new ResetPasswordReq("NewPassw0rd!")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+
+        // 持有 sys:role:grant:all 时可以跨级管理
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "COMPANY",
+                Set.of("sys:user:view", "sys:user:edit", "sys:role:grant:all"));
+        assertThat(userAdminService.resetPassword(2L, new ResetPasswordReq("NewPassw0rd!")).id())
+                .isEqualTo(2L);
+    }
+
+    @Test
+    void 不能移除最后一个系统管理员的权限() {
+        // 让角色 1 成为唯一持有 sys:role:edit 的角色，hr01 是唯一使用者
+        jdbc.update("INSERT INTO sys_role_grant (role_id, perm_code) VALUES (1, 'sys:role:edit')");
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+
+        assertThatThrownBy(() -> roleAdminService.replaceGrants(1L, new RoleGrantReq(List.of())))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("sys:role:edit");
+        // 回滚后授权仍在
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_role_grant WHERE role_id = 1 AND perm_code = 'sys:role:edit'",
+                Integer.class)).isEqualTo(1);
+
+        // 移除用户 1 的角色同样会让自己失去最后的系统管理能力
+        assertThatThrownBy(() -> userAdminService.update(1L,
+                new UserUpdateReq(null, null, null, null, List.of())))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("sys:role:edit");
+    }
+
+    @Test
+    void 不能停用最后一个系统管理员() {
+        // 只给角色 2（hr02）授予 sys:role:edit，hr02 成为唯一管理员
+        jdbc.update("INSERT INTO sys_role_grant (role_id, perm_code) VALUES (2, 'sys:role:edit')");
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+
+        assertThatThrownBy(() -> userAdminService.update(2L,
+                new UserUpdateReq(null, null, null, 0, null)))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("sys:role:edit");
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM sys_user WHERE id = 2", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void 授权审计记录差集而不是全量() {
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+
+        roleAdminService.replaceGrants(3L,
+                new RoleGrantReq(List.of("payroll:record:view", "sys:user:view")));
+        Map<String, Object> added = jdbc.queryForMap("""
+                SELECT old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'ROLE' AND biz_id = 3 AND action = 'GRANT_REPLACE'
+                 ORDER BY id DESC LIMIT 1
+                """);
+        assertThat(added.get("old_value")).isEqualTo("");
+        assertThat(added.get("new_value")).isEqualTo("sys:user:view");
+
+        roleAdminService.replaceGrants(3L, new RoleGrantReq(List.of("payroll:record:view")));
+        Map<String, Object> removed = jdbc.queryForMap("""
+                SELECT old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'ROLE' AND biz_id = 3 AND action = 'GRANT_REPLACE'
+                 ORDER BY id DESC LIMIT 1
+                """);
+        assertThat(removed.get("old_value")).isEqualTo("sys:user:view");
+        assertThat(removed.get("new_value")).isEqualTo("");
     }
 
     @Test

@@ -422,25 +422,50 @@ public class ExportService {
         ReportService.normalizeGroupBy(params.groupBy());
     }
 
+    /**
+     * 审计里的查询条件必须与实际生效的过滤条件一致。
+     * PERIOD_SHEET/PAYSLIP 根本不接受 companyId，写进去反而会让人误以为已按主体过滤。
+     */
     private static String describe(String type, ReportExportParams params) {
         StringBuilder sb = new StringBuilder("type=").append(type);
-        if (params.periodYm() != null) {
-            sb.append(";periodYm=").append(params.periodYm());
-        }
-        if (params.year() != null) {
-            sb.append(";year=").append(params.year());
-        }
-        if (params.groupBy() != null) {
-            sb.append(";groupBy=").append(params.groupBy());
-        }
-        if (params.companyId() != null) {
-            sb.append(";companyId=").append(params.companyId());
-        }
-        if (params.deptId() != null) {
-            sb.append(";deptId=").append(params.deptId());
-        }
-        if (params.employeeIds() != null) {
-            sb.append(";employeeIds=").append(params.employeeIds());
+        switch (type) {
+            case "MONTHLY" -> {
+                sb.append(";periodYm=").append(params.periodYm());
+                if (params.companyId() != null) {
+                    sb.append(";companyId=").append(params.companyId());
+                }
+                if (params.deptId() != null) {
+                    sb.append(";deptId=").append(params.deptId());
+                }
+            }
+            case "ANNUAL" -> {
+                sb.append(";year=").append(params.year());
+                sb.append(";groupBy=").append(params.groupBy());
+                if (params.companyId() != null) {
+                    sb.append(";companyId=").append(params.companyId());
+                }
+                if (params.deptId() != null) {
+                    sb.append(";deptId=").append(params.deptId());
+                }
+            }
+            case "PERIOD_SHEET" -> {
+                sb.append(";periodYm=").append(params.periodYm());
+                if (params.deptId() != null) {
+                    sb.append(";deptId=").append(params.deptId());
+                }
+            }
+            case "PAYSLIP" -> {
+                sb.append(";periodYm=").append(params.periodYm());
+                if (params.deptId() != null) {
+                    sb.append(";deptId=").append(params.deptId());
+                }
+                if (params.employeeIds() != null) {
+                    sb.append(";employeeIds=").append(params.employeeIds());
+                }
+            }
+            default -> {
+                // 不会走到；未知类型在前面已被 400 拦截
+            }
         }
         return sb.toString();
     }

@@ -45,7 +45,9 @@ public class AuditService {
         CurrentUser current = CurrentUser.get();
 
         AuditLogEntity entity = new AuditLogEntity();
-        entity.setCompanyId(current == null ? null : current.companyId());
+        // 集团级账号看到的是跨主体数据，写"本人主体"会让审计看起来已按主体过滤，实际没有
+        entity.setCompanyId(current == null || "ALL".equals(current.dataScope())
+                ? null : current.companyId());
         entity.setBizType(bizType);
         entity.setBizId(bizId);
         entity.setAction(action);

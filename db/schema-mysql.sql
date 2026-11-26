@@ -366,6 +366,9 @@ CREATE TABLE pay_import_batch (
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at  DATETIME     NULL,
   PRIMARY KEY (id),
+  -- 幂等第一步：同一期间 + 同一业务类型 + 同一文件只允许一个批次。
+  -- 依赖唯一约束而不是"先查后插"：并发上传同一文件时先查后插会双双通过。
+  UNIQUE KEY uk_period_type_hash (period_id, biz_type, file_hash),
   KEY idx_period_status_hash (period_id, status, file_hash),
   KEY idx_period (period_id),
   KEY idx_file_hash (file_hash)
@@ -397,9 +400,9 @@ CREATE TABLE pay_import_error (
 CREATE TABLE pay_audit_log (
   id            BIGINT       NOT NULL AUTO_INCREMENT,
   company_id    BIGINT       NULL,
-  biz_type      VARCHAR(32)  NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW',
+  biz_type      VARCHAR(32)  NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW/REPORT/ROLE/USER/DEPT/COMPANY',
   biz_id        BIGINT       NULL,
-  action        VARCHAR(32)  NOT NULL COMMENT 'CREATE/UPDATE/DELETE/LOCK/UNLOCK/EXPORT/VIEW',
+  action        VARCHAR(32)  NOT NULL COMMENT 'CREATE/UPDATE/DELETE/LOCK/UNLOCK/EXPORT/VIEW/GRANT_REPLACE',
   field_name    VARCHAR(64)  NULL,
   old_value     TEXT         NULL COMMENT '敏感值需加密后写入',
   new_value     TEXT         NULL,

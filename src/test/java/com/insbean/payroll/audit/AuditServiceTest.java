@@ -2,6 +2,7 @@ package com.insbean.payroll.audit;
 
 import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.Test;
@@ -36,9 +37,22 @@ class AuditServiceTest extends AbstractDbTest {
 
         assertThat(((Number) row.get("operator_id")).longValue()).isEqualTo(1L);
         assertThat(row.get("operator_name")).isEqualTo("薪酬专员");
-        assertThat(row.get("company_id")).isEqualTo(TestDb.COMPANY_DEFAULT);
+        // 集团级账号看到的是跨主体数据，company_id 必须留空，否则审计看起来"已按主体过滤"
+        assertThat(row.get("company_id")).isNull();
         assertThat(row.get("new_value")).isEqualTo("月度工资表");
         assertThat(row.get("created_at")).isNotNull();
+    }
+
+    @Test
+    void 非集团账号的审计记录主体() {
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                java.util.Set.of("payroll:record:view"), "COMPANY", null));
+        auditService.record("REPORT", null, "VIEW", "MONTHLY", null, "periodYm=2026-11");
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT * FROM pay_audit_log WHERE biz_type = 'REPORT'");
+        assertThat(row.get("company_id")).isEqualTo(TestDb.COMPANY_DEFAULT);
+        assertThat(row.get("action")).isEqualTo("VIEW");
     }
 
     @Test

@@ -143,6 +143,7 @@ public class UserAdminService {
     @Transactional
     public UserDTO update(Long id, UserUpdateReq req) {
         CurrentUser me = requireUser();
+        int adminsBefore = userMapper.countActiveAdmins();
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
 
@@ -177,6 +178,7 @@ public class UserAdminService {
             replaceRoles(id, roles);
         }
 
+        assertAdminSurvives(adminsBefore);
         auditService.record("USER", id, "UPDATE", req.roleIds() == null ? null : "roles",
                 null, req.roleIds() == null ? null : req.roleIds().toString());
         return toDto(entity, roles);
@@ -190,8 +192,10 @@ public class UserAdminService {
         }
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        int adminsBefore = userMapper.countActiveAdmins();
         // 逻辑删除；拦截器 findById 会立即查不到该用户 → 其 token 下一次请求即 401
         userMapper.deleteById(id);
+        assertAdminSurvives(adminsBefore);
         auditService.record("USER", id, "DELETE", "username", entity.getUsername(), null);
     }
 
@@ -199,8 +203,11 @@ public class UserAdminService {
 
     @Transactional
     public UserDTO resetPassword(Long id, ResetPasswordReq req) {
+        CurrentUser me = requireUser();
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        // 低权管理员不能通过"重置密码再登录"接管权限更高的账号
+        assertCanManageAccount(entity, me);
         String newPassword = req == null ? null : req.newPassword();
         // 契约 minLength=8：服务层也要拦，不能只靠前端表单
         if (newPassword == null || newPassword.isBlank()) {
@@ -230,6 +237,8 @@ public class UserAdminService {
             dataScope.assertCompanyVisible(role.getCompanyId());
             // 分配的账号范围不能超出操作者自身（避免"给自己配一个 ALL 角色"式提权）
             ScopeGuard.assertScopeNotWider(role.getDataScope(), me);
+            // 只比范围不比权限，分公司管理员就能把"权限比自己多"的既有角色挂到自己身上
+            ScopeGuard.assertPermissionsWithinOperator(roleMapper.findPermissions(role.getId()), me);
             roles.add(role);
         }
         return roles;
@@ -309,6 +318,35 @@ public class UserAdminService {
         return new UserDTO(u.getId(), u.getCompanyId(), u.getUsername(), u.getRealName(),
                 u.getEmployeeId(), u.getDeptId(), u.getMobileMask(), u.getStatus(), u.getLastLoginAt(),
                 roleIds, List.copyOf(permissions), widestScope(scopes));
+    }
+
+    /**
+     * 目标账号的范围与权限点必须 ⊆ 操作者自身；否则需要 sys:role:grant:all。
+     * 不挡这条路，前面所有防提权不变量都能被"重置密码 → 登录"绕过。
+     */
+    private void assertCanManageAccount(SysUserEntity target, CurrentUser me) {
+        if (me.has(ScopeGuard.PERM_GRANT_ALL)) {
+            return;
+        }
+        List<RoleRow> roles = loadRoles(userMapper.findRoleIds(target.getId()));
+        String targetScope = widestScope(roles.stream().map(RoleRow::getDataScope).toList());
+        if (ScopeGuard.rank(targetScope) > ScopeGuard.rank(me.dataScope())) {
+            throw new BizException(403, "不能管理数据范围高于自己的账号");
+        }
+        Set<String> targetPerms = new LinkedHashSet<>();
+        for (RoleRow role : roles) {
+            targetPerms.addAll(roleMapper.findPermissions(role.getId()));
+        }
+        if (!me.permissions().containsAll(targetPerms)) {
+            throw new BizException(403, "不能管理权限点高于自己的账号");
+        }
+    }
+
+    /** 任何权限变更后都要保证系统里还剩至少一个可用管理员（否则只能改库恢复）。 */
+    private void assertAdminSurvives(int adminsBefore) {
+        if (adminsBefore > 0 && userMapper.countActiveAdmins() == 0) {
+            throw new BizException(409, "系统必须保留至少一个启用且持有 sys:role:edit 的用户");
+        }
     }
 
     static String widestScope(List<String> scopes) {

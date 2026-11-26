@@ -57,6 +57,20 @@ public interface UserAdminMapper extends BaseMapper<SysUserEntity> {
             """)
     List<UserScopeRow> findDataScopes(@Param("userIds") List<Long> userIds);
 
+    /**
+     * 当前仍可使用系统管理能力的账号数（启用 + 未删除 + 经启用角色持有 sys:role:edit）。
+     * 任何会改变权限的写操作之后都要复查：归零意味着只能改库才能恢复。
+     */
+    @Select("""
+            SELECT COUNT(DISTINCT u.id)
+              FROM sys_user u
+              JOIN sys_user_role ur ON ur.user_id = u.id
+              JOIN sys_role r       ON r.id = ur.role_id AND r.status = 1 AND r.deleted = 0
+              JOIN sys_role_grant g ON g.role_id = r.id AND g.perm_code = 'sys:role:edit'
+             WHERE u.deleted = 0 AND u.status = 1
+            """)
+    int countActiveAdmins();
+
     @Update("DELETE FROM sys_user_role WHERE user_id = #{userId}")
     int deleteUserRoles(@Param("userId") Long userId);
 

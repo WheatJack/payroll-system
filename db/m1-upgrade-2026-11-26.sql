@@ -49,3 +49,14 @@ ALTER TABLE pay_period
 
 -- 8) 删除零写零读的预聚合表（留空表等于留下第二个真源）
 DROP TABLE IF EXISTS pay_summary_monthly;
+
+-- 9) 导入幂等交给唯一约束（P0-5）
+--    同一期间 + 同一业务类型 + 同一文件只允许一个批次；并发上传靠撞键拦，
+--    不再"先查后插"（TOCTOU）。APPEND 模式已删除：对绝对金额做累加等于重复发薪。
+ALTER TABLE pay_import_batch
+  ADD UNIQUE KEY uk_period_type_hash (period_id, biz_type, file_hash);
+
+-- 10) 审计口径：补充 REPORT / GRANT_REPLACE 等实际使用的取值
+ALTER TABLE pay_audit_log
+  MODIFY biz_type VARCHAR(32) NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW/REPORT/ROLE/USER/DEPT/COMPANY',
+  MODIFY action  VARCHAR(32) NOT NULL COMMENT 'CREATE/UPDATE/DELETE/LOCK/UNLOCK/EXPORT/VIEW/GRANT_REPLACE';

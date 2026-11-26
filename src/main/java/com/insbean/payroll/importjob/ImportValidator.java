@@ -3,12 +3,14 @@ package com.insbean.payroll.importjob;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.event.AnalysisEventListener;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.item.ItemService;
 import com.insbean.payroll.item.dto.PayItemDefDTO;
 import com.insbean.payroll.record.mapper.PayRecordMapper;
+import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 变动数据导入的解析与预校验。
@@ -44,10 +47,17 @@ public class ImportValidator {
 
     private final PayRecordMapper recordMapper;
     private final ItemService itemService;
+    private final DataScopeEnforcer dataScope;
 
-    public ImportValidator(PayRecordMapper recordMapper, ItemService itemService) {
+    public ImportValidator(PayRecordMapper recordMapper, ItemService itemService,
+                           DataScopeEnforcer dataScope) {
         this.recordMapper = recordMapper;
         this.itemService = itemService;
+        this.dataScope = dataScope;
+    }
+
+    /** 记录是否在当前用户的数据范围内；存在但不可见必须 403，而不是伪装成"没有记录"。 */
+    private record RecordRef(Long id, boolean visible) {
     }
 
     public record ValidatedRow(int rowNo, Long recordId, Map<String, BigDecimal> amounts) {
@@ -64,7 +74,7 @@ public class ImportValidator {
     public Result validate(Path file, Long periodId, Long companyId,
                            String bizType, int maxRows, int maxErrorRows) {
         Map<String, PayItemDefDTO> itemDefs = importableItems(companyId, bizType);
-        Map<String, Long> recordByEmpNo = recordByEmpNo(periodId, companyId);
+        Map<String, RecordRef> recordByEmpNo = recordByEmpNo(periodId, companyId);
 
         List<Map<Integer, String>> headRows = readHeadRows(file);
         boolean machineHeader = isMachineHeader(headRows);
@@ -73,11 +83,21 @@ public class ImportValidator {
 
         Collector collector = new Collector(maxRows, maxErrorRows, columns,
                 recordByEmpNo, itemDefs);
-        EasyExcel.read(file.toFile())
-                .sheet(0)
-                .headRowNumber(headerRows)
-                .registerReadListener(collector)
-                .doRead();
+        try {
+            EasyExcel.read(file.toFile())
+                    .sheet(0)
+                    .headRowNumber(headerRows)
+                    .registerReadListener(collector)
+                    .doRead();
+        } catch (RuntimeException e) {
+            // EasyExcel 会把监听器里抛出的业务异常包一层；把 403 原样还原
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof BizException biz) {
+                    throw biz;
+                }
+            }
+            throw e;
+        }
         return collector.toResult(itemDefs);
     }
 
@@ -181,7 +201,7 @@ public class ImportValidator {
         private final int maxRows;
         private final int maxErrorRows;
         private final Map<Integer, String> columns;
-        private final Map<String, Long> recordByEmpNo;
+        private final Map<String, RecordRef> recordByEmpNo;
         private final Map<String, PayItemDefDTO> itemDefs;
         private final List<ValidatedRow> validRows = new ArrayList<>();
         private final List<RowError> errors = new ArrayList<>();
@@ -190,7 +210,7 @@ public class ImportValidator {
         private int totalRows;
 
         private Collector(int maxRows, int maxErrorRows, Map<Integer, String> columns,
-                          Map<String, Long> recordByEmpNo, Map<String, PayItemDefDTO> itemDefs) {
+                          Map<String, RecordRef> recordByEmpNo, Map<String, PayItemDefDTO> itemDefs) {
             this.maxRows = maxRows;
             this.maxErrorRows = maxErrorRows;
             this.columns = columns;
@@ -219,12 +239,17 @@ public class ImportValidator {
                         "文件内工号重复，第 " + excelRow + " 行之前已出现");
                 return;
             }
-            Long recordId = recordByEmpNo.get(empNo);
-            if (recordId == null) {
+            RecordRef recordRef = recordByEmpNo.get(empNo);
+            if (recordRef == null) {
                 addError(excelRow, TITLE_EMP_NO, empNo, "NO_RECORD",
                         "该工号在本期间没有核算记录（导入只修改已有记录，不创建记录）");
                 return;
             }
+            // 记录存在但不在数据范围内：这是越权，不是"文件写错了"
+            if (!recordRef.visible()) {
+                throw new BizException(403, "无权导入该人员的核算记录：" + empNo);
+            }
+            Long recordId = recordRef.id();
 
             Map<String, BigDecimal> amounts = new LinkedHashMap<>();
             boolean rowFailed = false;
@@ -306,14 +331,34 @@ public class ImportValidator {
         return result;
     }
 
-    private Map<String, Long> recordByEmpNo(Long periodId, Long companyId) {
-        Map<String, Long> result = new HashMap<>();
+    /**
+     * 期间内全部记录 + 当前用户可见的记录集合。
+     *
+     * <p>导入同样必须过 {@link DataScopeEnforcer}：只校验"期间可见"是不够的，
+     * 部门主管拿到 import:submit 就能改别的部门的金额。可见性用一次 SQL 下推算出，
+     * 避免逐行调用（DEPT_SUB 的判定是子查询，逐行会放大成 N 次）。
+     */
+    private Map<String, RecordRef> recordByEmpNo(Long periodId, Long companyId) {
         List<PayRecordEntity> records = recordMapper.selectList(Wrappers.<PayRecordEntity>lambdaQuery()
+                .select(PayRecordEntity::getId, PayRecordEntity::getEmpNo)
                 .eq(PayRecordEntity::getPeriodId, periodId)
                 .eq(PayRecordEntity::getCompanyId, companyId)
                 .eq(PayRecordEntity::getDeleted, 0));
+
+        LambdaQueryWrapper<PayRecordEntity> visibleQuery = Wrappers.<PayRecordEntity>lambdaQuery()
+                .select(PayRecordEntity::getId)
+                .eq(PayRecordEntity::getPeriodId, periodId)
+                .eq(PayRecordEntity::getCompanyId, companyId)
+                .eq(PayRecordEntity::getDeleted, 0);
+        dataScope.applyRecordFilter(visibleQuery);
+        Set<Long> visibleIds = recordMapper.selectList(visibleQuery).stream()
+                .map(PayRecordEntity::getId)
+                .collect(Collectors.toSet());
+
+        Map<String, RecordRef> result = new HashMap<>();
         for (PayRecordEntity record : records) {
-            result.put(record.getEmpNo(), record.getId());
+            result.put(record.getEmpNo(), new RecordRef(record.getId(),
+                    visibleIds.contains(record.getId())));
         }
         return result;
     }

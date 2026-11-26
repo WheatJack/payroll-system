@@ -7,6 +7,7 @@ import com.insbean.payroll.admin.dto.RoleGrantReq;
 import com.insbean.payroll.admin.dto.RoleUpdateReq;
 import com.insbean.payroll.admin.mapper.RoleAdminMapper;
 import com.insbean.payroll.admin.mapper.RolePermRow;
+import com.insbean.payroll.admin.mapper.UserAdminMapper;
 import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.security.CurrentUser;
@@ -36,12 +37,14 @@ public class RoleAdminService {
                     DataScopeEnforcer.DEPT_SUB, DataScopeEnforcer.DEPT, DataScopeEnforcer.SELF);
 
     private final RoleAdminMapper roleMapper;
+    private final UserAdminMapper userMapper;
     private final AuditService auditService;
     private final DataScopeEnforcer dataScope;
 
-    public RoleAdminService(RoleAdminMapper roleMapper, AuditService auditService,
-                            DataScopeEnforcer dataScope) {
+    public RoleAdminService(RoleAdminMapper roleMapper, UserAdminMapper userMapper,
+                            AuditService auditService, DataScopeEnforcer dataScope) {
         this.roleMapper = roleMapper;
+        this.userMapper = userMapper;
         this.auditService = auditService;
         this.dataScope = dataScope;
     }
@@ -111,6 +114,7 @@ public class RoleAdminService {
     @Transactional
     public RoleDTO update(Long id, RoleUpdateReq req) {
         CurrentUser me = requireUser();
+        int adminsBefore = userMapper.countActiveAdmins();
         RoleRow entity = requireRole(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
 
@@ -140,6 +144,7 @@ public class RoleAdminService {
             entity.setStatus(req.status());
         }
         roleMapper.updateById(entity);
+        assertAdminSurvives(adminsBefore);
 
         auditService.record("ROLE", id, "UPDATE", "dataScope",
                 null, entity.getDataScope());
@@ -150,12 +155,14 @@ public class RoleAdminService {
     public void delete(Long id) {
         RoleRow entity = requireRole(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        int adminsBefore = userMapper.countActiveAdmins();
         if (roleMapper.countLinkedUsers(id) > 0) {
             throw new BizException(409, "仍有用户关联该角色，请先改授其它角色");
         }
         roleMapper.deleteById(id);
         // 授权一并失效（保留行没有意义，且会让重新创建同 id 时看起来"复活"）
         roleMapper.deleteGrants(id);
+        assertAdminSurvives(adminsBefore);
         auditService.record("ROLE", id, "DELETE", "roleCode", entity.getRoleCode(), null);
     }
 
@@ -173,8 +180,17 @@ public class RoleAdminService {
         // 核心防提权：只能授出自己持有的权限点
         ScopeGuard.assertPermissionsWithinOperator(permissions, me);
 
+        List<String> before = roleMapper.findPermissions(id);
+        int adminsBefore = userMapper.countActiveAdmins();
         replaceGrants(id, permissions);
-        auditService.record("ROLE", id, "UPDATE", "permissions", null, permissions.toString());
+        assertAdminSurvives(adminsBefore);
+
+        // 审计必须记差集：全量集合回答不了"谁在何时把 export 给了谁"
+        String removed = before.stream().filter(p -> !permissions.contains(p)).sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+        String added = permissions.stream().filter(p -> !before.contains(p)).sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+        auditService.record("ROLE", id, "GRANT_REPLACE", "permissions", removed, added);
         return toDto(entity, permissions);
     }
 
@@ -225,6 +241,13 @@ public class RoleAdminService {
             result.computeIfAbsent(row.getRoleId(), k -> new ArrayList<>()).add(row.getPermCode());
         }
         return result;
+    }
+
+    /** 任何权限变更后都要保证系统里还剩至少一个可用管理员（否则只能改库恢复）。 */
+    private void assertAdminSurvives(int adminsBefore) {
+        if (adminsBefore > 0 && userMapper.countActiveAdmins() == 0) {
+            throw new BizException(409, "系统必须保留至少一个启用且持有 sys:role:edit 的用户");
+        }
     }
 
     private static RoleDTO toDto(RoleRow r, List<String> permissions) {

@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -122,6 +123,20 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 幂等唯一键包含业务类型() {
+        String sql = """
+                INSERT INTO pay_import_batch
+                  (period_id, biz_type, file_name, file_hash, import_mode,
+                   total_rows, success_rows, fail_rows, status, operator_id, created_at)
+                VALUES (?, ?, 'a.xlsx', 'samehash', 'UPSERT', 0, 0, 0, 'VALIDATED', 1, NOW())
+                """;
+        jdbc.update(sql, periodId, "FIXED");
+        assertThatCode(() -> jdbc.update(sql, periodId, "VARIABLE")).doesNotThrowAnyException();
+        assertThatThrownBy(() -> jdbc.update(sql, periodId, "FIXED"))
+                .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+    }
+
+    @Test
     void 失败行禁止提交且不产生新记录() throws Exception {
         int recordsBefore = countRecords();
 
@@ -186,20 +201,20 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
-    void APPEND模式累加_INSERT_ONLY不覆盖已有明细() throws Exception {
+    void APPEND模式已下线_INSERT_ONLY不覆盖已有明细() throws Exception {
+        // APPEND 对绝对金额累加 == 重复发薪，设计 P0-5 要求 MVP 删除
+        assertThatThrownBy(() -> importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", "APPEND"))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+
         Long recordId = recordId("E001");
         insertExistingAllowance(recordId, "300.00");
 
-        ImportValidateResultDTO appended = importService.validate(
-                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", "APPEND");
-        importService.commit(appended.batchId());
-        assertThat(itemAmount("E001", "POST_ALLOW")).isEqualByComparingTo("1800.00");
-
-        // INSERT_ONLY：已有明细保持原值
         ImportValidateResultDTO insertOnly = importService.validate(
                 fixedFile(new Object[][]{{"E001", "员工1", 9999}}), periodId, "FIXED", "INSERT_ONLY");
         importService.commit(insertOnly.batchId());
-        assertThat(itemAmount("E001", "POST_ALLOW")).isEqualByComparingTo("1800.00");
+        assertThat(itemAmount("E001", "POST_ALLOW")).isEqualByComparingTo("300.00");
     }
 
     @Test
@@ -213,6 +228,90 @@ class ImportServiceTest extends AbstractDbTest {
         assertThatThrownBy(() -> importService.commit(result.batchId()))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("已锁定");
+    }
+
+    @Test
+    void DEPT_SUB不能导入其他部门的记录() throws Exception {
+        jdbc.update("INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status) VALUES (10, 1, 1, 'D010', '研发组', ',1,', 10, 1)");
+        // 让当前用户变成部门 10 的 DEPT_SUB 账号：E001 在部门 1，不在其子树
+        jdbc.update("UPDATE sys_user SET dept_id = 10 WHERE id = 1");
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:import:submit", "payroll:record:view", "payroll:export"),
+                "DEPT_SUB", null));
+
+        assertThatThrownBy(() -> importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void DEPT范围可以导入本部门记录() throws Exception {
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:import:submit", "payroll:record:view"), "DEPT", null));
+
+        ImportValidateResultDTO result = importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null);
+        assertThat(result.failRows()).isZero();
+    }
+
+    @Test
+    void 部门级账号不能读取他人发起的批次() throws Exception {
+        // 用户 2 发起批次
+        CurrentUser.set(new CurrentUser(2L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:import:submit", "payroll:record:view", "payroll:export"),
+                "COMPANY", null));
+        ImportValidateResultDTO batch = importService.validate(
+                fixedFile(new Object[][]{{"E999", "不存在", 100}}), periodId, "FIXED", null);
+
+        // 部门级账号连 read 都不行：错误明细里带别部门的工号与原值
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:import:submit", "payroll:record:view", "payroll:export"),
+                "DEPT_SUB", null));
+        assertThatThrownBy(() -> importService.get(batch.batchId()))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        assertThatThrownBy(() -> importService.errors(batch.batchId()))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void 提交重校验失败会刷新错误表与failRows() throws Exception {
+        ImportValidateResultDTO result = importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null);
+        // 预览之后记录被删除（模拟并发解锁删行 / 数据被改）
+        jdbc.update("DELETE FROM pay_record WHERE id = ?", recordId("E001"));
+
+        assertThatThrownBy(() -> importService.commit(result.batchId()))
+                .isInstanceOf(ImportConflictException.class)
+                .satisfies(e -> assertThat(((ImportConflictException) e).getFailRows()).isEqualTo(1));
+
+        // 前端轮询必须能看到最新的失败行与原因
+        assertThat(jdbc.queryForObject(
+                "SELECT fail_rows FROM pay_import_batch WHERE id = ?", Integer.class, result.batchId()))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_import_error WHERE batch_id = ? AND error_code = 'NO_RECORD'",
+                Integer.class, result.batchId())).isEqualTo(1);
+    }
+
+    @Test
+    void 校验失败不留下孤儿原始文件() throws Exception {
+        java.nio.file.Path storage = java.nio.file.Path.of(
+                System.getProperty("java.io.tmpdir"), "payroll-test-import");
+        long before = Files.exists(storage)
+                ? Files.list(storage).count() : 0;
+
+        byte[] bad = buildFileRaw(List.of("工号", "不存在的科目"),
+                List.of("empNo", "NOPE"), new Object[][]{{"E001", 1}});
+        assertThatThrownBy(() -> importService.validate(
+                new MockMultipartFile("file", "bad.xlsx", XLSX, bad), periodId, "FIXED", null))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+
+        long after = Files.exists(storage) ? Files.list(storage).count() : 0;
+        assertThat(after).isEqualTo(before);
     }
 
     // ------------------------------------------------------------------ 模板与错误报告
