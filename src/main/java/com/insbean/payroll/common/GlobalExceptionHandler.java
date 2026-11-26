@@ -3,28 +3,39 @@ package com.insbean.payroll.common;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
+/**
+ * 统一错误出口。
+ *
+ * <p>body 恒为 {@code {code, msg, data}}；HTTP 状态码与 body.code 保持一致
+ * （400/401/403/409/500），这样前端既能用 fetch 的 status 做兜底，
+ * 也能按 body.code 做业务分支，代理/监控也能正确统计错误率。
+ */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
-    public Result<Void> handleBiz(BizException e) {
-        return Result.fail(e.getCode(), e.getMessage());
+    public ResponseEntity<Result<Void>> handleBiz(BizException e) {
+        HttpStatus status = HttpStatus.resolve(e.getCode());
+        if (status == null) {
+            status = HttpStatus.BAD_REQUEST;
+        }
+        return ResponseEntity.status(status).body(Result.fail(e.getCode(), e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Result<Void> handleValidation(MethodArgumentNotValidException e) {
+    public ResponseEntity<Result<Void>> handleValidation(MethodArgumentNotValidException e) {
         String msg = e.getBindingResult().getFieldErrors().stream()
                 .map(f -> f.getField() + ": " + f.getDefaultMessage())
                 .collect(Collectors.joining("; "));
-        return Result.fail(400, msg);
+        return ResponseEntity.badRequest().body(Result.fail(400, msg));
     }
 
     /**
@@ -33,25 +44,29 @@ public class GlobalExceptionHandler {
      * 这里只负责把并发穿透的漏网之鱼翻译成人话，不暴露数据库细节。
      */
     @ExceptionHandler(DuplicateKeyException.class)
-    public Result<Void> handleDuplicateKey(DuplicateKeyException e) {
+    public ResponseEntity<Result<Void>> handleDuplicateKey(DuplicateKeyException e) {
         String raw = e.getMessage() == null ? "" : e.getMessage();
         log.warn("唯一约束冲突: {}", raw);
         if (raw.contains("uk_emp_ym_active")) {
-            return Result.fail(409, "该员工在该月份已存在有效工资核算记录（可能在其他分公司），请先核对");
+            return conflict("该员工在该月份已存在有效工资核算记录（可能在其他分公司），请先核对");
         }
         if (raw.contains("uk_emp_no")) {
-            return Result.fail(409, "工号已被占用");
+            return conflict("工号已被占用");
         }
         if (raw.contains("uk_id_hash")) {
-            return Result.fail(409, "该证件号码已存在人员记录");
+            return conflict("该证件号码已存在人员记录");
         }
-        return Result.fail(409, "数据重复，请刷新后重试");
+        return conflict("数据重复，请刷新后重试");
     }
 
     @ExceptionHandler(Exception.class)
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Result<Void> handleOther(Exception e) {
+    public ResponseEntity<Result<Void>> handleOther(Exception e) {
         log.error("未处理异常", e);
-        return Result.fail(500, "系统异常，请联系管理员");
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.fail(500, "系统异常，请联系管理员"));
+    }
+
+    private static ResponseEntity<Result<Void>> conflict(String msg) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Result.fail(409, msg));
     }
 }
