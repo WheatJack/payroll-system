@@ -299,7 +299,7 @@ CREATE TABLE pay_record (
   net_amount           DECIMAL(18,4) NOT NULL DEFAULT 0 COMMENT '实发 = gross - deduction',
   -- 版本
   record_status        VARCHAR(16)   NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT/CONFIRMED',
-  version_no           INT           NOT NULL DEFAULT 1,
+  version_no           INT           NOT NULL DEFAULT 0,
   superseded_by        BIGINT        NULL COMMENT '被哪条记录取代',
   remark               VARCHAR(255)  NULL,
   created_by           BIGINT        NULL,
