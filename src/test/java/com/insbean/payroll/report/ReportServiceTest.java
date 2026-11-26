@@ -22,6 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -218,6 +219,32 @@ class ReportServiceTest extends AbstractDbTest {
         assertThat(rows.get(0).employeeId()).isEqualTo(emp2);
         assertThat(rows.get(0).groupBy()).isEqualTo("EMP");
         assertThat(rows.get(0).employeeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 查询报表写VIEW审计_只记条件与行数_空结果不写() {
+        reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+
+        List<Map<String, Object>> views = jdbc.queryForList(
+                "SELECT action, new_value FROM pay_audit_log WHERE biz_type = 'REPORT'");
+        assertThat(views).hasSize(1);
+        assertThat(views.get(0).get("action")).isEqualTo("VIEW");
+        String value = (String) views.get(0).get("new_value");
+        assertThat(value).contains("periodYm=2026-11").contains("rows=");
+        // 审计不复制工资数据：只记条件与行数，绝不记每条金额
+        assertThat(value).doesNotContain("8600").doesNotContain("8000");
+
+        // 空结果不写审计（没看到任何数据就没有窥探痕迹）
+        assertThat(reportService.monthly(ReportQuery.monthly("2026-10", null, null))).isEmpty();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_audit_log WHERE biz_type = 'REPORT'", Integer.class)).isEqualTo(1);
+
+        reportService.annual(ReportQuery.annual("2026", "EMP", null, null));
+        List<Map<String, Object>> afterAnnual = jdbc.queryForList(
+                "SELECT new_value FROM pay_audit_log WHERE biz_type = 'REPORT' ORDER BY id");
+        assertThat(afterAnnual).hasSize(2);
+        assertThat((String) afterAnnual.get(1).get("new_value"))
+                .contains("year=2026").contains("groupBy=EMP");
     }
 
     @Test

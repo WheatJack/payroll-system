@@ -23,17 +23,28 @@ public class DeptService {
     /**
      * 返回扁平部门列表（不是嵌套结构）：契约要求前端拿 parentId/ancestors 自行组树，
      * 这样前端可以做懒加载与虚拟滚动，后端也不必为每个主体建一次递归。
+     *
+     * @param includeDisabled 契约 v1.1：默认 false 只返回启用部门；
+     *                        系统管理页需要 true 才能显示并重新启用已停用部门
      */
-    public List<DeptDTO> tree(Long companyId) {
+    public List<DeptDTO> tree(Long companyId, boolean includeDisabled) {
         dataScope.assertCompanyVisible(companyId);
-        return deptMapper.selectList(Wrappers.<SysDeptEntity>lambdaQuery()
-                        .eq(SysDeptEntity::getCompanyId, companyId)
-                        .eq(SysDeptEntity::getStatus, 1)
-                        .orderByAsc(SysDeptEntity::getSortNo)
-                        .orderByAsc(SysDeptEntity::getId))
+        var query = Wrappers.<SysDeptEntity>lambdaQuery()
+                .eq(SysDeptEntity::getCompanyId, companyId)
+                .orderByAsc(SysDeptEntity::getSortNo)
+                .orderByAsc(SysDeptEntity::getId);
+        if (!includeDisabled) {
+            query.eq(SysDeptEntity::getStatus, 1);
+        }
+        return deptMapper.selectList(query)
                 .stream()
                 .map(d -> new DeptDTO(d.getId(), d.getCompanyId(), d.getParentId(), d.getDeptCode(),
                         d.getDeptName(), d.getAncestors(), d.getSortNo(), d.getStatus()))
                 .toList();
+    }
+
+    /** 兼容旧调用方：默认不含停用部门。 */
+    public List<DeptDTO> tree(Long companyId) {
+        return tree(companyId, false);
     }
 }

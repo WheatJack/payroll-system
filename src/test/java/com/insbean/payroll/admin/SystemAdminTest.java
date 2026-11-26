@@ -14,6 +14,7 @@ import com.insbean.payroll.admin.dto.UserDTO;
 import com.insbean.payroll.admin.dto.UserPageDTO;
 import com.insbean.payroll.admin.dto.UserUpdateReq;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.org.DeptService;
 import com.insbean.payroll.org.dto.DeptDTO;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.TokenService;
@@ -55,6 +56,9 @@ class SystemAdminTest extends AbstractDbTest {
 
     @Autowired
     private CompanyAdminService companyAdminService;
+
+    @Autowired
+    private DeptService deptService;
 
     @Autowired
     private TokenService tokenService;
@@ -297,6 +301,22 @@ class SystemAdminTest extends AbstractDbTest {
         assertThatThrownBy(() -> deptAdminService.delete(TestDb.DEPT_DEFAULT))
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(409);
+    }
+
+    @Test
+    void 部门列表默认不含停用部门_includeDisabled可返回() {
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+        DeptDTO disabled = deptAdminService.create(new DeptCreateReq(
+                TestDb.COMPANY_DEFAULT, 0L, "OLD", "历史部门", 50, 1));
+        deptAdminService.update(disabled.id(), new DeptUpdateReq(null, null, null, null, 0));
+
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT, false))
+                .extracting(DeptDTO::id).doesNotContain(disabled.id());
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT, true))
+                .extracting(DeptDTO::id).contains(disabled.id());
+        // 兼容旧签名：默认行为不变
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT))
+                .extracting(DeptDTO::id).doesNotContain(disabled.id());
     }
 
     // ------------------------------------------------------------------ 主体

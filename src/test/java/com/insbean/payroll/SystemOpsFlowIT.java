@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -170,7 +171,38 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(response.getContentAsByteArray()).startsWith(new byte[]{'P', 'K'});
     }
 
+    @Test
+    void 部门树includeDisabled走真实HTTP() throws Exception {
+        jdbc.update("""
+                INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status)
+                VALUES (30, 1, 0, 'OLD', '历史部门', '', 50, 0)
+                """);
+        String token = login("hr01");
+
+        JsonNode defaults = getJson("/api/v1/depts", token, "companyId", "1");
+        assertThat(deptIds(defaults)).contains("1").doesNotContain("30");
+
+        JsonNode all = getJson("/api/v1/depts", token, "companyId", "1", "includeDisabled", "true");
+        assertThat(deptIds(all)).contains("1", "30");
+    }
+
     // ------------------------------------------------------------------ 工具
+
+    private JsonNode getJson(String path, String token, String... params) throws Exception {
+        var request = get(path).header("Authorization", "Bearer " + token);
+        for (int i = 0; i + 1 < params.length; i += 2) {
+            request = request.param(params[i], params[i + 1]);
+        }
+        MvcResult result = mvc.perform(request).andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        return objectMapper.readTree(body(result));
+    }
+
+    private static List<String> deptIds(JsonNode body) {
+        List<String> ids = new java.util.ArrayList<>();
+        body.path("data").forEach(node -> ids.add(node.path("id").asText()));
+        return ids;
+    }
 
     private long lockedPayroll() {
         Long empId = employeeService.create(new EmployeeSaveReq(

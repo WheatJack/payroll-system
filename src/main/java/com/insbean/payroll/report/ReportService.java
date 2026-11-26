@@ -2,6 +2,7 @@ package com.insbean.payroll.report;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.report.dto.AnnualReportRow;
@@ -40,10 +41,13 @@ public class ReportService {
 
     private final ReportMapper reportMapper;
     private final DataScopeEnforcer dataScope;
+    private final AuditService auditService;
 
-    public ReportService(ReportMapper reportMapper, DataScopeEnforcer dataScope) {
+    public ReportService(ReportMapper reportMapper, DataScopeEnforcer dataScope,
+                         AuditService auditService) {
         this.reportMapper = reportMapper;
         this.dataScope = dataScope;
+        this.auditService = auditService;
     }
 
     public List<MonthlyReportRow> monthly(ReportQuery query) {
@@ -70,7 +74,7 @@ public class ReportService {
                 .orderByAsc(PayRecordEntity::getDeptId);
         dataScope.applyRecordFilter(wrapper);
 
-        return reportMapper.monthly(wrapper).stream()
+        List<MonthlyReportRow> rows = reportMapper.monthly(wrapper).stream()
                 .map(row -> new MonthlyReportRow(
                         asLong(row.get("company_id")),
                         String.valueOf(row.get("period_ym")),
@@ -81,6 +85,8 @@ public class ReportService {
                         money(row.get("deduction_amount")),
                         money(row.get("net_amount"))))
                 .toList();
+        auditView("MONTHLY", "periodYm=" + periodYm, companyId, query.deptId(), rows.size());
+        return rows;
     }
 
     public List<AnnualReportRow> annual(ReportQuery query) {
@@ -115,7 +121,7 @@ public class ReportService {
         if ("EMP".equals(groupBy)) {
             wrapper.groupBy(PayRecordEntity::getEmployeeId)
                     .orderByAsc(PayRecordEntity::getEmployeeId);
-            return reportMapper.annualByEmployee(wrapper).stream()
+            List<AnnualReportRow> rows = reportMapper.annualByEmployee(wrapper).stream()
                     .map(row -> new AnnualReportRow(
                             year, "EMP", null, null,
                             asLong(row.get("employee_id")),
@@ -126,12 +132,14 @@ public class ReportService {
                             money(row.get("deduction_amount")),
                             money(row.get("net_amount"))))
                     .toList();
+            auditView("ANNUAL", "year=" + year + ";groupBy=EMP", companyId, query.deptId(), rows.size());
+            return rows;
         }
 
         wrapper.groupBy(PayRecordEntity::getCompanyId, PayRecordEntity::getDeptId)
                 .orderByAsc(PayRecordEntity::getCompanyId)
                 .orderByAsc(PayRecordEntity::getDeptId);
-        return reportMapper.annualByDept(wrapper).stream()
+        List<AnnualReportRow> rows = reportMapper.annualByDept(wrapper).stream()
                 .map(row -> new AnnualReportRow(
                         year, "DEPT",
                         asLong(row.get("dept_id")),
@@ -142,6 +150,34 @@ public class ReportService {
                         money(row.get("deduction_amount")),
                         money(row.get("net_amount"))))
                 .toList();
+        auditView("ANNUAL", "year=" + year + ";groupBy=DEPT", companyId, query.deptId(), rows.size());
+        return rows;
+    }
+
+    /**
+     * 查看报表也要留痕（设计 §4.7：看了谁的工资同样要审计）。
+     *
+     * <p>只记查询条件与命中行数，**不记每条金额**——逐行金额会把审计表写爆，
+     * 且审计的目的在于"谁在什么时候查了谁的薪酬范围"，不是复制一份工资表。
+     * 空结果不写：没有看到任何数据就没有窥探痕迹。
+     */
+    private void auditView(String field, String base, Long companyId, Long deptId, int rows) {
+        if (rows <= 0) {
+            return;
+        }
+        auditService.record("REPORT", null, "VIEW", field, null,
+                conditions(base, companyId, deptId, rows));
+    }
+
+    private static String conditions(String base, Long companyId, Long deptId, int rows) {
+        StringBuilder sb = new StringBuilder(base);
+        if (companyId != null) {
+            sb.append(";companyId=").append(companyId);
+        }
+        if (deptId != null) {
+            sb.append(";deptId=").append(deptId);
+        }
+        return sb.append(";rows=").append(rows).toString();
     }
 
     /** 只统计已锁定/已归档期间的有效记录；永远显式写出 deleted=0，自定义 SQL 不会自动加逻辑删除条件。 */

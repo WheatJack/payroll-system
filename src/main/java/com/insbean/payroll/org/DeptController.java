@@ -23,10 +23,11 @@ public class DeptController {
 
     @RequirePerm("payroll:record:view")
     @GetMapping
-    public Result<List<DeptDTO>> list(@RequestParam Long companyId) {
+    public Result<List<DeptDTO>> list(@RequestParam Long companyId,
+                                      @RequestParam(defaultValue = "false") boolean includeDisabled) {
         if (companyId == null) {
             throw new BizException(400, "companyId 必填");
         }
-        return Result.ok(deptService.tree(companyId));
+        return Result.ok(deptService.tree(companyId, includeDisabled));
     }
 }
