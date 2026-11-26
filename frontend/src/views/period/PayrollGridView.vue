@@ -11,16 +11,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Download, Refresh } from '@element-plus/icons-vue'
 import * as gridApi from '@/api/grid'
+import * as reportApi from '@/api/report'
 import { listDepts } from '@/api/org'
 import { conflictRecordIds, isApiError } from '@/api/client'
+import { saveBlob } from '@/api/download'
 import type { EmployeeType, GridColumn, GridRow, PeriodStatus } from '@/api/models'
 import MoneyInput from '@/components/MoneyInput.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, sub } from '@/utils/money'
+import { buildPayslipParams, buildPeriodSheetParams } from '@/utils/export'
 import { parseClipboardMatrix } from '@/utils/paste'
 
 const route = useRoute()
@@ -45,7 +48,57 @@ const STATUS_META: Record<PeriodStatus, { label: string; type: 'info' | 'primary
 const periodStatus = computed<PeriodStatus>(() => store.period?.status ?? 'EDITING')
 const statusMeta = computed(() => STATUS_META[periodStatus.value])
 const canSavePermission = computed(() => auth.has('payroll:record:edit'))
+const canExport = computed(() => auth.has('payroll:export'))
 const editable = computed(() => periodStatus.value === 'EDITING' && canSavePermission.value)
+
+/* ------------------------------ 导出 ------------------------------ */
+
+const exporting = ref<'' | 'sheet' | 'payslip'>('')
+
+/** 期间完整工资表（含全部工资项列）。 */
+async function exportPeriodSheet() {
+  if (!store.period) return
+  exporting.value = 'sheet'
+  try {
+    const file = await reportApi.exportReport(
+      {
+        reportType: 'PERIOD_SHEET',
+        params: buildPeriodSheetParams(store.period.periodYm, store.filter.deptId),
+        format: 'XLSX',
+      },
+      `period-sheet-${store.period.periodYm}.xlsx`,
+    )
+    saveBlob(file.blob, file.filename)
+    ElMessage.success('导出已开始下载')
+  } catch (error) {
+    ElMessage.error(isApiError(error) ? error.message : '导出失败，请稍后重试')
+  } finally {
+    exporting.value = ''
+  }
+}
+
+/** 工资条：按当前可见行（筛选后）导出，一个人或一批人。 */
+async function exportPayslip() {
+  if (!store.period) return
+  const employeeIds = store.visibleRows.map((row) => row.employeeId)
+  exporting.value = 'payslip'
+  try {
+    const file = await reportApi.exportReport(
+      {
+        reportType: 'PAYSLIP',
+        params: buildPayslipParams(store.period.periodYm, employeeIds),
+        format: 'XLSX',
+      },
+      `payslip-${store.period.periodYm}.xlsx`,
+    )
+    saveBlob(file.blob, file.filename)
+    ElMessage.success(`导出已开始下载（${employeeIds.length} 人）`)
+  } catch (error) {
+    ElMessage.error(isApiError(error) ? error.message : '导出失败，请稍后重试')
+  } finally {
+    exporting.value = ''
+  }
+}
 
 const META_COLUMNS = [
   { field: 'empNo', title: '工号', width: 100, fixed: 'left' as const },
@@ -367,6 +420,12 @@ onBeforeUnmount(() => {
           </template>
           <el-tag v-else type="success" size="small">无未保存修改</el-tag>
         </span>
+        <el-button v-if="canExport" :icon="Download" :loading="exporting === 'sheet'" @click="exportPeriodSheet">
+          导出工资表
+        </el-button>
+        <el-button v-if="canExport" :icon="Download" :loading="exporting === 'payslip'" @click="exportPayslip">
+          导出工资条（{{ store.visibleRows.length }} 人）
+        </el-button>
         <el-button type="primary" :disabled="!editable || !store.hasChanges" :loading="saving" @click="save">
           保存修改
         </el-button>
