@@ -8,6 +8,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -28,6 +30,19 @@ public class GlobalExceptionHandler {
             status = HttpStatus.BAD_REQUEST;
         }
         return ResponseEntity.status(status).body(Result.fail(e.getCode(), e.getMessage()));
+    }
+
+    /**
+     * 乐观锁冲突：HTTP 409 + {@code data.conflicts}。
+     * 前端要靠 recordId 清单高亮具体哪几行被他人改过，所以不能只回一个空 data。
+     */
+    @ExceptionHandler(VersionConflictException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleVersionConflict(VersionConflictException e) {
+        List<Map<String, Object>> conflicts = e.getRecordIds().stream()
+                .map(id -> Map.<String, Object>of("recordId", String.valueOf(id)))
+                .toList();
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new Result<>(409, e.getMessage(), Map.of("conflicts", conflicts)));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
