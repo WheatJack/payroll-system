@@ -27,6 +27,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -332,6 +337,111 @@ class SystemAdminTest extends AbstractDbTest {
                 """);
         assertThat(removed.get("old_value")).isEqualTo("sys:user:view");
         assertThat(removed.get("new_value")).isEqualTo("");
+    }
+
+    @Test
+    void 权限子集不足时即使数据范围相同也拒绝重置密码() {
+        // 操作者同样是 ALL 范围（rank 不会拦），但权限点少于目标账号
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
+                Set.of("sys:user:view", "sys:user:edit"));
+
+        assertThatThrownBy(() -> userAdminService.resetPassword(2L, new ResetPasswordReq("NewPassw0rd!")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void 修改用户分配角色也要校验权限子集() {
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
+                Set.of("sys:user:view", "sys:user:edit", "sys:role:view", "sys:role:edit"));
+
+        assertThatThrownBy(() -> userAdminService.update(2L,
+                new UserUpdateReq(null, null, null, null, List.of(1L))))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        // 回滚：原角色没有被替换
+        assertThat(jdbc.queryForObject(
+                "SELECT role_id FROM sys_user_role WHERE user_id = 2", Long.class)).isEqualTo(2L);
+    }
+
+    @Test
+    void 授权差集为空不写审计() {
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+        int before = grantAuditCount(3L);
+
+        // 与当前授权完全相同 → 不产生空审计
+        roleAdminService.replaceGrants(3L, new RoleGrantReq(List.of("payroll:record:view")));
+
+        assertThat(grantAuditCount(3L)).isEqualTo(before);
+    }
+
+    @Test
+    void 并发互相移除管理员权限恰好一个成功() throws Exception {
+        // 两个角色各自持有 sys:role:edit，两个用户各用一个 → 系统当前有 2 个管理员
+        jdbc.update("""
+                INSERT INTO sys_role_grant (role_id, perm_code) VALUES
+                  (1, 'sys:role:edit'), (2, 'sys:role:edit')
+                """);
+        assertThat(activeAdminCount()).isEqualTo(2);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 3; round++) {
+                CyclicBarrier barrier = new CyclicBarrier(2);
+                Future<Integer> a = pool.submit(() -> removeAdminGrant(barrier, 1L, 1L));
+                Future<Integer> b = pool.submit(() -> removeAdminGrant(barrier, 2L, 2L));
+
+                List<Integer> results = List.of(
+                        a.get(60, TimeUnit.SECONDS), b.get(60, TimeUnit.SECONDS));
+
+                // 真库、真事务：恰好一个成功，另一个被 409 挡住并回滚
+                assertThat(results).containsExactlyInAnyOrder(0, 409);
+                assertThat(activeAdminCount()).isPositive();
+
+                // 恢复下一轮初始状态（幂等：先删后插）
+                jdbc.update("DELETE FROM sys_role_grant WHERE role_id IN (1, 2) AND perm_code = 'sys:role:edit'");
+                jdbc.update("""
+                        INSERT INTO sys_role_grant (role_id, perm_code) VALUES
+                          (1, 'sys:role:edit'), (2, 'sys:role:edit')
+                        """);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** 独立线程 + 独立事务：两个管理员同时互相剥夺对方的 sys:role:edit。 */
+    private Integer removeAdminGrant(CyclicBarrier barrier, long roleId, long userId) throws Exception {
+        CurrentUser.set(new CurrentUser(userId, TestDb.COMPANY_DEFAULT, FULL_ADMIN_PERMS, "ALL", null));
+        try {
+            barrier.await(30, TimeUnit.SECONDS);
+            roleAdminService.replaceGrants(roleId, new RoleGrantReq(List.of()));
+            return 0;
+        } catch (BizException e) {
+            return e.getCode();
+        } finally {
+            CurrentUser.clear();
+        }
+    }
+
+    private int activeAdminCount() {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(DISTINCT u.id)
+                  FROM sys_user u
+                  JOIN sys_user_role ur ON ur.user_id = u.id
+                  JOIN sys_role r       ON r.id = ur.role_id AND r.status = 1 AND r.deleted = 0
+                  JOIN sys_role_grant g ON g.role_id = r.id AND g.perm_code = 'sys:role:edit'
+                 WHERE u.deleted = 0 AND u.status = 1
+                """, Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private int grantAuditCount(long roleId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_audit_log
+                 WHERE biz_type = 'ROLE' AND biz_id = ? AND action = 'GRANT_REPLACE'
+                """, Integer.class, roleId);
+        return count == null ? 0 : count;
     }
 
     @Test

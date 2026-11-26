@@ -357,7 +357,7 @@ CREATE TABLE pay_import_batch (
   file_name    VARCHAR(255) NOT NULL,
   file_hash    CHAR(64)     NOT NULL COMMENT 'SHA-256，防重复提交',
   file_path    VARCHAR(512) NULL COMMENT 'MinIO 对象路径',
-  import_mode  VARCHAR(16)  NOT NULL DEFAULT 'UPSERT' COMMENT 'UPSERT/APPEND/INSERT_ONLY',
+  import_mode  VARCHAR(16)  NOT NULL DEFAULT 'UPSERT' COMMENT 'UPSERT/INSERT_ONLY（APPEND 已下线：绝对金额累加等于重复发薪）',
   total_rows   INT          NOT NULL DEFAULT 0,
   success_rows INT          NOT NULL DEFAULT 0,
   fail_rows    INT          NOT NULL DEFAULT 0,

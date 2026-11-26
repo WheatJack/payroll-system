@@ -114,6 +114,8 @@ public class RoleAdminService {
     @Transactional
     public RoleDTO update(Long id, RoleUpdateReq req) {
         CurrentUser me = requireUser();
+        // 先锁后数：并发互相剥夺权限时，第二个事务必须等第一个提交后再读
+        userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         RoleRow entity = requireRole(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
@@ -155,6 +157,7 @@ public class RoleAdminService {
     public void delete(Long id) {
         RoleRow entity = requireRole(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         if (roleMapper.countLinkedUsers(id) > 0) {
             throw new BizException(409, "仍有用户关联该角色，请先改授其它角色");
@@ -181,6 +184,7 @@ public class RoleAdminService {
         ScopeGuard.assertPermissionsWithinOperator(permissions, me);
 
         List<String> before = roleMapper.findPermissions(id);
+        userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         replaceGrants(id, permissions);
         assertAdminSurvives(adminsBefore);
@@ -190,7 +194,10 @@ public class RoleAdminService {
                 .collect(java.util.stream.Collectors.joining(","));
         String added = permissions.stream().filter(p -> !before.contains(p)).sorted()
                 .collect(java.util.stream.Collectors.joining(","));
-        auditService.record("ROLE", id, "GRANT_REPLACE", "permissions", removed, added);
+        // 差集为空说明什么都没变，不写空审计（否则审计表全是 old="" new="" 的噪音）
+        if (!removed.isEmpty() || !added.isEmpty()) {
+            auditService.record("ROLE", id, "GRANT_REPLACE", "permissions", removed, added);
+        }
         return toDto(entity, permissions);
     }
 

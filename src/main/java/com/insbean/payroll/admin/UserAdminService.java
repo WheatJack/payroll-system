@@ -143,6 +143,8 @@ public class UserAdminService {
     @Transactional
     public UserDTO update(Long id, UserUpdateReq req) {
         CurrentUser me = requireUser();
+        // 先锁后数：并发互相剥夺权限时，第二个事务必须等第一个提交后再读
+        userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
@@ -192,6 +194,7 @@ public class UserAdminService {
         }
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         // 逻辑删除；拦截器 findById 会立即查不到该用户 → 其 token 下一次请求即 401
         userMapper.deleteById(id);
