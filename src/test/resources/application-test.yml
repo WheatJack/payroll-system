@@ -16,6 +16,9 @@ payroll:
     token-ttl-minutes: 120
     id-no-salt: 0123456789abcdef0123456789abcdef
     aes-key: 0123456789abcdef0123456789abcdef
+  storage:
+    # 导入文件落到系统临时目录，不污染仓库
+    local-path: ${java.io.tmpdir}/payroll-test-import
 
 logging:
   level:
