@@ -246,8 +246,9 @@ CREATE TABLE pay_period (
   locked_at      DATETIME      NULL,
   unlock_reason  VARCHAR(255)  NULL,
   -- 任务租赁：防止两人同时触发生成/导入。长任务不得持有行锁，改为抢占租约
+  -- 精度用微秒：租约 TTL 可能只有毫秒级（测试与快速重试），DATETIME 秒级会把过期判断拖到下一秒
   processing_owner     VARCHAR(64) NULL COMMENT '当前持有处理租约的任务标识',
-  processing_expire_at DATETIME    NULL COMMENT '租约过期时间，过期可被抢占',
+  processing_expire_at DATETIME(6) NULL COMMENT '租约过期时间，过期可被抢占',
   version        INT           NOT NULL DEFAULT 0 COMMENT '乐观锁',
   created_by     BIGINT        NULL,
   created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
