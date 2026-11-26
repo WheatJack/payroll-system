@@ -70,7 +70,8 @@ public class ExcelWriter {
     public PreparedExport write(String filename, List<SheetData> sheets) throws IOException {
         Path temp = Files.createTempFile("payroll-export-", ".xlsx");
         boolean success = false;
-        try (SXSSFWorkbook workbook = new SXSSFWorkbook(200)) {
+        SXSSFWorkbook workbook = new SXSSFWorkbook(200);
+        try {
             CellStyles styles = new CellStyles(workbook);
             long rowCount = 0;
             for (SheetData data : sheets) {
@@ -81,10 +82,16 @@ public class ExcelWriter {
             try (OutputStream out = Files.newOutputStream(temp)) {
                 workbook.write(out);
             }
-            workbook.dispose();
             success = true;
             return new PreparedExport(temp, filename, rowCount);
         } finally {
+            // dispose 删除 SXSSF 在磁盘上的临时分片；异常路径也必须清理
+            workbook.dispose();
+            try {
+                workbook.close();
+            } catch (IOException ignored) {
+                // 关闭失败不影响结果
+            }
             if (!success) {
                 Files.deleteIfExists(temp);
             }

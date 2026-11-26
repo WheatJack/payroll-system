@@ -158,8 +158,18 @@ public class ExportService {
             throw new BizException(500, "导出文件生成失败");
         }
         // 审计在响应头之前写：写不进去就不该把文件发出去（合规要求）
-        auditService.record("EXPORT", null, "EXPORT", type, null,
-                description + ";rows=" + prepared.rows());
+        try {
+            auditService.record("EXPORT", null, "EXPORT", type, null,
+                    description + ";rows=" + prepared.rows());
+        } catch (RuntimeException e) {
+            // 审计失败必须清理临时文件（含全量工资数据）再抛出
+            try {
+                java.nio.file.Files.deleteIfExists(prepared.path());
+            } catch (IOException ignored) {
+                log.warn("导出临时文件清理失败：{}", prepared.path());
+            }
+            throw e;
+        }
         return prepared;
     }
 

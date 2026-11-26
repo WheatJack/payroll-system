@@ -395,8 +395,13 @@ public class ImportService {
             log.error("错误报告生成失败", e);
             throw new BizException(500, "错误报告生成失败");
         }
-        auditService.record("EXPORT", batchId, "EXPORT", "IMPORT_ERRORS", null,
-                "batchId=" + batchId + ";rows=" + rows.size());
+        try {
+            auditService.record("EXPORT", batchId, "EXPORT", "IMPORT_ERRORS", null,
+                    "batchId=" + batchId + ";rows=" + rows.size());
+        } catch (RuntimeException e) {
+            deleteQuietly(prepared.path());
+            throw e;
+        }
         return prepared;
     }
 
