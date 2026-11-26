@@ -13,6 +13,7 @@ const formRef = ref<FormInstance>()
 const form = reactive({ username: '', password: '' })
 const errorMessage = ref('')
 const submitting = ref(false)
+const isMock = import.meta.env.VITE_USE_MOCK === 'true'
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -62,6 +63,10 @@ async function submit() {
 
         <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" show-icon class="login-error" />
 
+        <div v-if="isMock" class="mock-hint">
+          Mock 模式：演示账号 <code>hr</code> / <code>hr123456</code>
+        </div>
+
         <el-button type="primary" size="large" class="login-submit" :loading="submitting" @click="submit">
           登 录
         </el-button>
@@ -102,6 +107,17 @@ async function submit() {
 }
 .login-error {
   margin-bottom: 16px;
+}
+.mock-hint {
+  margin-bottom: 16px;
+  padding: 8px 10px;
+  background: #f4f4f5;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+.mock-hint code {
+  color: #409eff;
 }
 .login-submit {
   width: 100%;

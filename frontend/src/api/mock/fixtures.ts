@@ -1,0 +1,196 @@
+/**
+ * Mock 数据源（Task 17）。
+ *
+ * 契约响应示例直接复用 `docs/api/examples/*.json`（通过 ?raw 读取，不复制粘贴），
+ * 其余端点按 `docs/api/openapi.yaml` 的 schema 构造最小可用数据。
+ */
+import gridExampleRaw from '../../../../docs/api/examples/grid-response.json?raw'
+import type { Company, CompProfile, CurrentUser, Dept, Employee, GridResponse, PayItem, Period } from '@/api/models'
+
+interface Envelope<T> {
+  code: number
+  msg: string
+  data: T
+}
+
+/** GET /periods/{id}/grid 的 mock 响应 = 冻结契约的示例响应（截断示例：2 列 1 行）。 */
+export const GRID_EXAMPLE = (JSON.parse(gridExampleRaw) as Envelope<GridResponse>).data
+
+export const DEMO_TOKEN = 'mock-payroll-hmac-token'
+
+export const DEMO_USER: CurrentUser = {
+  userId: '1',
+  username: 'hr',
+  realName: '李人事',
+  companyId: '1',
+  employeeId: null,
+  dataScope: 'COMPANY',
+  permissions: [
+    'payroll:record:view',
+    'payroll:record:edit',
+    'payroll:period:lock',
+    'payroll:period:unlock',
+    'payroll:import:submit',
+    'payroll:export',
+    'payroll:sensitive:view',
+  ],
+}
+
+export const COMPANIES: Company[] = [
+  { id: '1', companyCode: 'BJ', companyName: '北京总部', status: 1 },
+  { id: '2', companyCode: 'SH', companyName: '上海分公司', status: 1 },
+]
+
+export const DEPTS: Dept[] = [
+  { id: '1', companyId: '1', parentId: '0', deptCode: 'RD', deptName: '北京研发部', ancestors: ',0,', sortNo: 10, status: 1 },
+  { id: '2', companyId: '1', parentId: '0', deptCode: 'FIN', deptName: '北京财务部', ancestors: ',0,', sortNo: 20, status: 1 },
+  { id: '3', companyId: '1', parentId: '1', deptCode: 'RD1', deptName: '研发一组', ancestors: ',0,1,', sortNo: 11, status: 1 },
+  { id: '10', companyId: '2', parentId: '0', deptCode: 'SHFIN', deptName: '上海财务部', ancestors: ',0,', sortNo: 10, status: 1 },
+]
+
+export const EMPLOYEES: Employee[] = [
+  {
+    id: '1',
+    companyId: '1',
+    empNo: 'E001',
+    name: '张三',
+    gender: 1,
+    idType: 'ID_CARD',
+    idNoMask: '****1234',
+    mobileMask: '138****8000',
+    employeeType: 'REGULAR',
+    jobLevel: 'P6',
+    positionName: '高级工程师',
+    deptId: '1',
+    hireDate: '2020-03-01',
+    workStartDate: '2019-07-01',
+    leaveDate: null,
+    status: 1,
+    remark: null,
+  },
+  {
+    id: '2',
+    companyId: '1',
+    empNo: 'E002',
+    name: '李四',
+    gender: 2,
+    idType: 'ID_CARD',
+    idNoMask: '****5678',
+    mobileMask: '139****9000',
+    employeeType: 'PROBATION',
+    jobLevel: 'P5',
+    positionName: '财务专员',
+    deptId: '2',
+    hireDate: '2026-09-01',
+    workStartDate: '2026-09-01',
+    leaveDate: null,
+    status: 1,
+    remark: null,
+  },
+  {
+    id: '3',
+    companyId: '1',
+    empNo: 'E003',
+    name: '王五',
+    gender: 1,
+    idType: 'ID_CARD',
+    idNoMask: '****9012',
+    mobileMask: null,
+    employeeType: 'INTERN',
+    jobLevel: null,
+    positionName: '实习生',
+    deptId: '3',
+    hireDate: '2026-07-01',
+    workStartDate: '2026-07-01',
+    leaveDate: null,
+    status: 1,
+    remark: null,
+  },
+]
+
+/** 明文证件号只存在于 mock 内部，用于演示 409 查重；接口永远只回掩码。 */
+export const EMPLOYEE_ID_NOS: Record<string, string> = {
+  '1': '110101199001011234',
+  '2': '310101199505055678',
+  '3': '440101200301019012',
+}
+
+/** 主体 1 的工资项（含固定/变动/计算，方向 1 增加 / 2 扣款）。 */
+export const PAY_ITEMS: PayItem[] = [
+  { id: '1', companyId: '0', itemCode: 'BASE_SALARY', itemName: '基本工资', category: 'FIXED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: false, importable: true, sortNo: 10, status: 1 },
+  { id: '2', companyId: '0', itemCode: 'SENIORITY_PAY', itemName: '工龄工资', category: 'FIXED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: false, importable: false, sortNo: 20, status: 1 },
+  { id: '3', companyId: '0', itemCode: 'POST_ALLOW', itemName: '岗位津贴', category: 'FIXED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: true, importable: true, sortNo: 30, status: 1 },
+  { id: '4', companyId: '0', itemCode: 'MEAL_ALLOW', itemName: '餐补', category: 'FIXED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: true, importable: true, sortNo: 40, status: 1 },
+  { id: '5', companyId: '0', itemCode: 'TRANSPORT_ALLOW', itemName: '交通补贴', category: 'FIXED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: true, importable: true, sortNo: 50, status: 1 },
+  { id: '6', companyId: '1', itemCode: 'PERF_BONUS', itemName: '绩效奖金', category: 'VARIABLE', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: true, importable: true, sortNo: 60, status: 1 },
+  { id: '7', companyId: '1', itemCode: 'OVERTIME_PAY', itemName: '加班费', category: 'VARIABLE', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: true, importable: true, sortNo: 70, status: 1 },
+  { id: '8', companyId: '0', itemCode: 'SOCIAL_INSURANCE', itemName: '社保个人部分', category: 'FIXED', direction: 2, dataType: 'AMOUNT', precisionScale: 2, includeInGross: false, editable: false, importable: false, sortNo: 80, status: 1 },
+  { id: '9', companyId: '0', itemCode: 'HOUSING_FUND', itemName: '公积金个人部分', category: 'FIXED', direction: 2, dataType: 'AMOUNT', precisionScale: 2, includeInGross: false, editable: false, importable: false, sortNo: 90, status: 1 },
+  { id: '10', companyId: '0', itemCode: 'IIT', itemName: '个人所得税', category: 'COMPUTED', direction: 2, dataType: 'AMOUNT', precisionScale: 2, includeInGross: false, editable: false, importable: false, sortNo: 100, status: 1 },
+  { id: '11', companyId: '1', itemCode: 'OTHER_DEDUCT', itemName: '其他扣款', category: 'VARIABLE', direction: 2, dataType: 'AMOUNT', precisionScale: 2, includeInGross: false, editable: true, importable: true, sortNo: 110, status: 1 },
+  { id: '12', companyId: '0', itemCode: 'ADJ_ROUNDING', itemName: '尾差调整', category: 'COMPUTED', direction: 1, dataType: 'AMOUNT', precisionScale: 2, includeInGross: true, editable: false, importable: false, sortNo: 120, status: 0 },
+]
+
+export const PERIODS: Period[] = [
+  {
+    id: '3',
+    companyId: '1',
+    periodYm: '2026-11',
+    status: 'EDITING',
+    employeeCount: 1,
+    totalGross: '8600.00',
+    totalNet: '8600.00',
+    hpd: '21.75',
+  },
+  {
+    id: '2',
+    companyId: '1',
+    periodYm: '2026-10',
+    status: 'LOCKED',
+    employeeCount: 1,
+    totalGross: '8500.00',
+    totalNet: '8500.00',
+    hpd: '21.75',
+  },
+  {
+    id: '1',
+    companyId: '1',
+    periodYm: '2026-09',
+    status: 'DRAFT',
+    employeeCount: 0,
+    totalGross: '0.00',
+    totalNet: '0.00',
+    hpd: '21.75',
+  },
+]
+
+export const COMP_PROFILES: CompProfile[] = [
+  {
+    id: '1',
+    employeeId: '1',
+    effectiveFrom: '2025-07-01',
+    effectiveTo: null,
+    baseSalary: '8000.00',
+    changeReason: '年度调薪',
+    status: 1,
+    items: [
+      { itemCode: 'POST_ALLOW', amount: '500.00' },
+      { itemCode: 'MEAL_ALLOW', amount: '300.00' },
+    ],
+  },
+  {
+    id: '2',
+    employeeId: '1',
+    effectiveFrom: '2024-01-01',
+    effectiveTo: '2025-06-30',
+    baseSalary: '7200.00',
+    changeReason: null,
+    status: 1,
+    items: [{ itemCode: 'POST_ALLOW', amount: '400.00' }],
+  },
+]
+
+/** 深拷贝，避免 handler 之间共享引用。 */
+export function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
