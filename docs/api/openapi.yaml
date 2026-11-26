@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: 工资核算系统 API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    工资核算系统 M1 冻结契约（后端 Controller 与前端 `src/api/types.ts` 均以此为准）。
+    工资核算系统 M1.5 冻结契约 v1.1（后端 Controller 与前端 `src/api/types.ts` 均以此为准）。
 
     ## 全局约定（不可协商）
 
@@ -1028,6 +1028,7 @@ paths:
         需要 `payroll:record:view`。按人或按部门汇总的年度数据；仅统计 `LOCKED` 与
         `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
         `COMPANY`/`ALL`）过滤。
+        `groupBy=DEPT` 且操作者数据范围含多个主体时 `companyId` 必填，缺则 400。
       operationId: getAnnualReport
       x-milestone: M1.5
       parameters:
@@ -1045,6 +1046,7 @@ paths:
         - name: companyId
           in: query
           required: false
+          description: groupBy=DEPT 且操作者范围含多个主体时必填，缺则 400
           schema:
             $ref: '#/components/schemas/Id'
         - name: deptId
@@ -1073,8 +1075,21 @@ paths:
       tags: [报表]
       summary: 导出汇总报表
       description: |
-        将月度或年度汇总导出为 xlsx 文件。需要 `payroll:export` 权限；
-        导出成功写审计日志（`pay_audit_log`，`action=EXPORT`，记录查询条件与导出行数）。
+        导出报表为 xlsx 文件，`reportType` 决定内容与必填参数：
+        - `MONTHLY`：月度汇总，`params.periodYm` 必填；
+        - `ANNUAL`：年度汇总，`params.year` + `params.groupBy` 必填；
+          `groupBy=DEPT` 且操作者数据范围含多个主体时 `params.companyId` 必填
+          （否则会把不同主体的同名部门合并加总），缺参返回 400；
+        - `PERIOD_SHEET`：期间完整工资表（含全部工资项列），`params.periodYm` 必填，
+          `params.deptId` 可选；
+        - `PAYSLIP`：员工工资条（一批人或一个人），`params.periodYm` 必填，
+          `params.employeeIds` 可选（不传时按数据范围导出可见人员）。
+          **工资条只含姓名、工号、部门、工资项与合计，不含证件号、手机号、银行卡号**
+          （最小必要原则）。
+        缺少对应类型的必填参数一律返回 400。
+
+        需要 `payroll:export` 权限；导出成功写审计日志（`pay_audit_log`，
+        `action=EXPORT`，记录查询条件与导出行数）。
         数据范围过滤与查询接口一致（`SELF` / `DEPT` / `DEPT_SUB` / `COMPANY` / `ALL`）。
         金额列以文本格式写入，避免 Excel 转为科学计数法。
 
@@ -1836,8 +1851,13 @@ components:
 
     ReportType:
       type: string
-      description: 报表类型（MONTHLY 月度 / ANNUAL 年度）
-      enum: [MONTHLY, ANNUAL]
+      description: |
+        报表类型：
+        - `MONTHLY` 月度汇总（按部门）
+        - `ANNUAL` 年度汇总（按人或按部门）
+        - `PERIOD_SHEET` 期间完整工资表（含全部工资项列）
+        - `PAYSLIP` 员工工资条（一批人或一个人）
+      enum: [MONTHLY, ANNUAL, PERIOD_SHEET, PAYSLIP]
 
     ReportFormat:
       type: string
@@ -2738,6 +2758,7 @@ components:
     # 报表    # ---------------------------------------------------------------
     MonthlyReportRow:
       type: object
+      description: 仅统计 `LOCKED` 与 `ARCHIVED` 期间；按部门汇总。
       required:
         [companyId, periodYm, deptId, employeeCount, grossAmount,
          deductionAmount, netAmount]
@@ -2763,6 +2784,9 @@ components:
 
     AnnualReportRow:
       type: object
+      description: |
+        仅统计 `LOCKED` 与 `ARCHIVED` 期间；年度按**归属期间**归集，
+        13 薪与年终奖计入其归属月份所在年度。
       required:
         [year, groupBy, employeeCount, grossAmount, deductionAmount, netAmount]
       properties:
@@ -2805,23 +2829,37 @@ components:
     ReportExportParams:
       type: object
       description: |
-        查询条件。`MONTHLY` 必填 `periodYm`；`ANNUAL` 必填 `year` 与 `groupBy`。
+        查询条件，按 `reportType` 取用不同字段：
+        - `MONTHLY`：`periodYm` 必填；
+        - `ANNUAL`：`year` + `groupBy` 必填；`groupBy=DEPT` 且操作者数据范围含多个
+          主体时 `companyId` 必填（否则会把不同主体的同名部门加总）；
+        - `PERIOD_SHEET`：`periodYm` 必填，`deptId` 可选（限定部门）；
+        - `PAYSLIP`：`periodYm` 必填，`employeeIds` 可选（一批人或一个人；
+          不传时按当前用户数据范围导出可见人员）。
+        缺少对应类型的必填参数返回 400。
         全部报表仅统计 `LOCKED` 与 `ARCHIVED` 期间，并按当前用户的数据范围过滤。
       properties:
         periodYm:
           type: string
           pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
-          description: 月度报表必填，如 "2026-11"
+          description: MONTHLY / PERIOD_SHEET / PAYSLIP 必填，如 "2026-11"
         year:
           type: string
           pattern: '^[0-9]{4}$'
-          description: 年度报表必填，如 "2026"
+          description: ANNUAL 必填，如 "2026"
         groupBy:
           $ref: '#/components/schemas/ReportGroupBy'
         companyId:
-          $ref: '#/components/schemas/Id'
+          description: ANNUAL + groupBy=DEPT 且操作者范围含多主体时必填，缺则 400
+          allOf:
+            - $ref: '#/components/schemas/Id'
         deptId:
           $ref: '#/components/schemas/Id'
+        employeeIds:
+          type: array
+          description: PAYSLIP 可选；指定则只导出这些人，不传按数据范围导出可见人员
+          items:
+            $ref: '#/components/schemas/Id'
 
     ExportRequest:
       type: object
