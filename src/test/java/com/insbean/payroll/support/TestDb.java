@@ -11,7 +11,7 @@ import java.util.List;
  *
  * <p>每次 {@link #reset()} 清空全部业务表并重建一套确定性基线：
  * 3 家主体（默认 / 北京 / 上海）、每家 1 个部门、9 个集团通用科目、
- * 3 个内置角色、2 个测试账号（hr01 编制 / hr02 复核）。
+ * 4 个内置角色（含 SYS_ADMIN）、3 个测试账号（hr01 编制 / hr02 复核 / admin 系统管理员）。
  *
  * <p>用 TRUNCATE 而不是 DELETE，是为了让自增 ID 从 1 开始，测试断言可预期。
  */
@@ -85,9 +85,10 @@ public class TestDb {
 
         jdbc.update("""
                 INSERT INTO sys_role (id, company_id, role_code, role_name, data_scope, status) VALUES
-                  (1, 1, 'PAYROLL_CLERK',    '薪酬专员', 'ALL', 1),
-                  (2, 1, 'PAYROLL_REVIEWER', '薪酬复核', 'ALL', 1),
-                  (3, 1, 'EMPLOYEE',         '普通员工', 'SELF', 1)
+                  (1, 1, 'PAYROLL_CLERK',    '薪酬专员',   'ALL', 1),
+                  (2, 1, 'PAYROLL_REVIEWER', '薪酬复核',   'ALL', 1),
+                  (3, 1, 'EMPLOYEE',         '普通员工',   'SELF', 1),
+                  (4, 1, 'SYS_ADMIN',        '系统管理员', 'ALL', 1)
                 """);
 
         jdbc.update("""
@@ -95,16 +96,20 @@ public class TestDb {
                   (1, 'payroll:record:view'), (1, 'payroll:record:edit'),
                   (1, 'payroll:import:submit'), (1, 'payroll:export'),
                   (2, 'payroll:record:view'), (2, 'payroll:period:lock'), (2, 'payroll:export'),
-                  (3, 'payroll:record:view')
+                  (3, 'payroll:record:view'),
+                  (4, 'sys:user:view'), (4, 'sys:user:edit'),
+                  (4, 'sys:role:view'), (4, 'sys:role:edit'), (4, 'sys:role:grant:all'),
+                  (4, 'sys:dept:edit'), (4, 'sys:company:edit')
                 """);
 
         String hash = passwordEncoder.encode(PASSWORD);
         jdbc.update("""
                 INSERT INTO sys_user (id, company_id, username, password_hash, real_name, dept_id, status) VALUES
                   (1, 1, 'hr01', ?, '薪酬专员', 1, 1),
-                  (2, 1, 'hr02', ?, '薪酬复核', 1, 1)
-                """, hash, hash);
+                  (2, 1, 'hr02', ?, '薪酬复核', 1, 1),
+                  (3, 1, 'admin', ?, '系统管理员', 1, 1)
+                """, hash, hash, hash);
 
-        jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (1, 1), (2, 2)");
+        jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (1, 1), (2, 2), (3, 4)");
     }
 }

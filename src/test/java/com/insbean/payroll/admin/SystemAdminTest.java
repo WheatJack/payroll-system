@@ -189,8 +189,8 @@ class SystemAdminTest extends AbstractDbTest {
         loginAs(1L, TestDb.COMPANY_DEFAULT, "COMPANY",
                 Set.of("sys:user:view", "sys:user:edit"));
         UserPageDTO page = userAdminService.list(1, 10, null, null, null, null);
-        assertThat(page.records()).extracting(UserDTO::username).containsExactly("hr01", "hr02");
-        assertThat(page.total()).isEqualTo(2);
+        assertThat(page.records()).extracting(UserDTO::username).containsExactly("hr01", "hr02", "admin");
+        assertThat(page.total()).isEqualTo(3);
 
         // 跨主体新建用户被拒
         assertThatThrownBy(() -> userAdminService.create(new UserCreateReq(
@@ -282,6 +282,8 @@ class SystemAdminTest extends AbstractDbTest {
 
     @Test
     void 不能移除最后一个系统管理员的权限() {
+        // 先摘掉种子管理员，构造"只剩 hr01 一个管理员"的场景
+        jdbc.update("DELETE FROM sys_role_grant WHERE role_id = 4 AND perm_code = 'sys:role:edit'");
         // 让角色 1 成为唯一持有 sys:role:edit 的角色，hr01 是唯一使用者
         jdbc.update("INSERT INTO sys_role_grant (role_id, perm_code) VALUES (1, 'sys:role:edit')");
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
@@ -303,7 +305,8 @@ class SystemAdminTest extends AbstractDbTest {
 
     @Test
     void 不能停用最后一个系统管理员() {
-        // 只给角色 2（hr02）授予 sys:role:edit，hr02 成为唯一管理员
+        // 先摘掉种子管理员；只给角色 2（hr02）授予 sys:role:edit，hr02 成为唯一管理员
+        jdbc.update("DELETE FROM sys_role_grant WHERE role_id = 4 AND perm_code = 'sys:role:edit'");
         jdbc.update("INSERT INTO sys_role_grant (role_id, perm_code) VALUES (2, 'sys:role:edit')");
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
 
@@ -377,7 +380,8 @@ class SystemAdminTest extends AbstractDbTest {
 
     @Test
     void 并发互相移除管理员权限恰好一个成功() throws Exception {
-        // 两个角色各自持有 sys:role:edit，两个用户各用一个 → 系统当前有 2 个管理员
+        // 摘掉种子管理员，构造两个用户各持一个管理员角色的初始状态
+        jdbc.update("DELETE FROM sys_role_grant WHERE role_id = 4 AND perm_code = 'sys:role:edit'");
         jdbc.update("""
                 INSERT INTO sys_role_grant (role_id, perm_code) VALUES
                   (1, 'sys:role:edit'), (2, 'sys:role:edit')

@@ -435,14 +435,24 @@ INSERT INTO pay_item (company_id, item_code, item_name, category, direction, dat
   (0, 'ADJ_ROUNDING',  '尾差调整',   'COMPUTED', 1, 'AMOUNT', 2, 1, 0, 0, 999);
 
 -- 内置角色
+-- SYS_ADMIN 是"全新安装后的第一个管理员"：没有它，部署完没有任何人能进入
+-- 系统管理页创建用户/分配权限（先有管理员才能建管理员 = 死循环）。
+-- 只授予 sys:*：薪酬专员不该能改用户和角色（三权分立）。
 INSERT INTO sys_role (company_id, role_code, role_name, data_scope) VALUES
-  (1, 'PAYROLL_CLERK',  '薪酬专员',   'ALL'),
-  (1, 'PAYROLL_REVIEWER','薪酬复核',  'ALL'),
-  (1, 'DEPT_MANAGER',   '部门主管',   'DEPT_SUB'),
-  (1, 'EMPLOYEE',       '普通员工',   'SELF');
+  (1, 'PAYROLL_CLERK',  '薪酬专员',     'ALL'),
+  (1, 'PAYROLL_REVIEWER','薪酬复核',    'ALL'),
+  (1, 'DEPT_MANAGER',   '部门主管',     'DEPT_SUB'),
+  (1, 'EMPLOYEE',       '普通员工',     'SELF'),
+  (1, 'SYS_ADMIN',      '系统管理员',   'ALL');
 
 INSERT INTO sys_role_grant (role_id, perm_code) VALUES
   (1, 'payroll:record:view'), (1, 'payroll:record:edit'), (1, 'payroll:import:submit'), (1, 'payroll:export'),
   (2, 'payroll:record:view'), (2, 'payroll:period:lock'), (2, 'payroll:export'),
   (3, 'payroll:record:view'),
   (4, 'payroll:record:view');
+
+-- 系统管理员：全部 sys:* 权限点（含授予 ALL 数据范围的 sys:role:grant:all）
+INSERT INTO sys_role_grant (role_id, perm_code) VALUES
+  (5, 'sys:user:view'), (5, 'sys:user:edit'),
+  (5, 'sys:role:view'), (5, 'sys:role:edit'), (5, 'sys:role:grant:all'),
+  (5, 'sys:dept:edit'), (5, 'sys:company:edit');

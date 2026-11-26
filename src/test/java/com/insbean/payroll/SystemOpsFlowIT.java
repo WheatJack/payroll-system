@@ -87,7 +87,7 @@ class SystemOpsFlowIT extends AbstractDbTest {
         MvcResult users = mvc.perform(get("/api/v1/users").header("Authorization", "Bearer " + hr01))
                 .andReturn();
         assertThat(users.getResponse().getStatus()).isEqualTo(200);
-        assertThat(objectMapper.readTree(body(users)).path("data").path("total").asInt()).isEqualTo(2);
+        assertThat(objectMapper.readTree(body(users)).path("data").path("total").asInt()).isEqualTo(3);
 
         // 停用自己 / 删除自己 → 409
         Map<String, Object> disableSelf = new LinkedHashMap<>();
@@ -110,6 +110,28 @@ class SystemOpsFlowIT extends AbstractDbTest {
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
         assertThat(mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + hr02))
                 .andReturn().getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void 全新种子下系统管理员可管理而薪酬专员仍被拒() throws Exception {
+        // 全新安装后必须存在一个能进入系统管理页的账号，否则"先有管理员才能建管理员"是死循环
+        String admin = login("admin");
+
+        JsonNode users = getJson("/api/v1/users", admin);
+        assertThat(users.path("code").asInt()).isZero();
+        assertThat(users.path("data").path("total").asInt()).isEqualTo(3);
+
+        JsonNode permissions = getJson("/api/v1/permissions", admin);
+        assertThat(permissions.path("data").size()).isEqualTo(14);
+
+        JsonNode roles = getJson("/api/v1/roles", admin);
+        assertThat(roles.path("data").size()).isGreaterThanOrEqualTo(4);
+        assertThat(roles.path("data").toString()).contains("SYS_ADMIN");
+
+        // 三权分立：薪酬专员没有 sys:* 权限，仍然看不到用户管理
+        String hr01 = login("hr01");
+        assertThat(mvc.perform(get("/api/v1/users").header("Authorization", "Bearer " + hr01))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
     }
 
     @Test

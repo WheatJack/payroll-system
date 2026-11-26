@@ -60,3 +60,20 @@ ALTER TABLE pay_import_batch
 ALTER TABLE pay_audit_log
   MODIFY biz_type VARCHAR(32) NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW/REPORT/ROLE/USER/DEPT/COMPANY',
   MODIFY action  VARCHAR(32) NOT NULL COMMENT 'CREATE/UPDATE/DELETE/LOCK/UNLOCK/EXPORT/VIEW/GRANT_REPLACE';
+
+-- 11) 系统管理员角色（全新安装的 schema 已内置；老环境在此补齐）
+--    没有它，部署完没有任何人能进入系统管理页创建用户/分配权限。
+INSERT IGNORE INTO sys_role (company_id, role_code, role_name, data_scope)
+VALUES (1, 'SYS_ADMIN', '系统管理员', 'ALL');
+
+INSERT IGNORE INTO sys_role_grant (role_id, perm_code)
+SELECT r.id, p.code
+  FROM sys_role r
+  JOIN (SELECT 'sys:user:view' AS code
+        UNION ALL SELECT 'sys:user:edit'
+        UNION ALL SELECT 'sys:role:view'
+        UNION ALL SELECT 'sys:role:edit'
+        UNION ALL SELECT 'sys:role:grant:all'
+        UNION ALL SELECT 'sys:dept:edit'
+        UNION ALL SELECT 'sys:company:edit') p
+ WHERE r.company_id = 1 AND r.role_code = 'SYS_ADMIN' AND r.deleted = 0;
