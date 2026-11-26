@@ -9,6 +9,7 @@ import type { Employee, EmployeeType } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, type DeptNode } from '@/utils/labels'
 import EmployeeFormDialog from './EmployeeFormDialog.vue'
+import CompProfilePanel from './CompProfilePanel.vue'
 
 const auth = useAuthStore()
 const canEdit = computed(() => auth.has('payroll:record:edit'))
@@ -31,6 +32,9 @@ const deptTree = ref<DeptNode[]>([])
 
 const dialogVisible = ref(false)
 const editing = ref<Employee | null>(null)
+
+const drawerVisible = ref(false)
+const drawerEmployee = ref<Employee | null>(null)
 
 const query = computed<employeeApi.EmployeeQuery>(() => {
   const result: employeeApi.EmployeeQuery = { current: current.value, size: size.value }
@@ -95,6 +99,11 @@ function openEdit(row: Employee) {
 
 function onSaved() {
   void load()
+}
+
+function openCompProfiles(row: Employee) {
+  drawerEmployee.value = row
+  drawerVisible.value = true
 }
 
 onMounted(() => {
@@ -176,10 +185,10 @@ onMounted(() => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="110" fixed="right">
+      <el-table-column label="操作" width="170" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="openCompProfiles(row)">薪酬档案</el-button>
           <el-button v-if="canEdit" link type="primary" @click="openEdit(row)">编辑</el-button>
-          <span v-else class="muted">只读</span>
         </template>
       </el-table-column>
       <template #empty>
@@ -200,6 +209,14 @@ onMounted(() => {
     </div>
 
     <EmployeeFormDialog v-model="dialogVisible" :employee="editing" :dept-tree="deptTree" @saved="onSaved" />
+
+    <el-drawer v-model="drawerVisible" :title="`薪酬档案 · ${drawerEmployee?.name ?? ''}`" size="680px" destroy-on-close>
+      <CompProfilePanel
+        v-if="drawerEmployee"
+        :employee-id="drawerEmployee.id"
+        :employee-name="drawerEmployee.name"
+      />
+    </el-drawer>
   </div>
 </template>
 
