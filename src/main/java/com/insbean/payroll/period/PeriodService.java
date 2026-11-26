@@ -1,6 +1,7 @@
 package com.insbean.payroll.period;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.domain.entity.PayPeriodEntity;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
@@ -38,10 +39,12 @@ public class PeriodService {
 
     private final PeriodMapper periodMapper;
     private final DataScopeEnforcer dataScope;
+    private final AuditService auditService;
 
-    public PeriodService(PeriodMapper periodMapper, DataScopeEnforcer dataScope) {
+    public PeriodService(PeriodMapper periodMapper, DataScopeEnforcer dataScope, AuditService auditService) {
         this.periodMapper = periodMapper;
         this.dataScope = dataScope;
+        this.auditService = auditService;
     }
 
     // ------------------------------------------------------------------ 查询
@@ -141,6 +144,8 @@ public class PeriodService {
         period.setLockedBy(userId);
         period.setLockedAt(LocalDateTime.now());
         periodMapper.updateById(period);
+        // 锁定是高危动作，必须留痕（谁在什么时候锁了哪一期）
+        auditService.record("PERIOD", periodId, "LOCK", "status", status.name(), PeriodStatus.LOCKED.name());
         return toDto(period);
     }
 
@@ -164,6 +169,9 @@ public class PeriodService {
         period.setLockedBy(null);
         period.setLockedAt(null);
         periodMapper.updateById(period);
+        // 解锁是最高危的动作（重开已锁定期间），原因必须进审计
+        auditService.record("PERIOD", periodId, "UNLOCK", "unlock_reason",
+                PeriodStatus.LOCKED.name(), reason.trim());
         return toDto(period);
     }
 

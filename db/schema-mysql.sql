@@ -60,6 +60,8 @@ CREATE TABLE sys_user (
   dept_id       BIGINT       NULL,
   mobile_mask   VARCHAR(16)  NULL,
   status        TINYINT      NOT NULL DEFAULT 1,
+  -- 无状态 token 的版本号：改密码/强制下线时 +1，旧 token 立即失效
+  token_version INT          NOT NULL DEFAULT 0,
   last_login_at DATETIME     NULL,
   created_by    BIGINT       NULL,
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -252,6 +254,9 @@ CREATE TABLE pay_period (
   processing_owner     VARCHAR(64) NULL COMMENT '当前持有处理租约的任务标识',
   processing_expire_at DATETIME(6) NULL COMMENT '租约过期时间，过期可被抢占',
   version        INT           NOT NULL DEFAULT 0 COMMENT '乐观锁',
+  -- 生成时的工资表列快照（JSON）。导出必须用它而不是当前启用科目：
+  -- 明细里可能含已停用科目，按当前字典导列会和合计对不上。
+  column_snapshot JSON         NULL COMMENT '生成时的工资表列快照',
   created_by     BIGINT        NULL,
   created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_by     BIGINT        NULL,
@@ -315,6 +320,7 @@ CREATE TABLE pay_record (
   -- 需求4（集团级）：同一人在同一年月、跨所有法人主体，只允许一条有效核算记录。
   -- 这是"北京和上海同时给一个人发工资"的唯一兜底，按 period_id 建索引拦不住。
   UNIQUE KEY uk_emp_ym_active (employee_id, period_ym, active_key),
+  KEY idx_company_period (company_id, period_ym),
   KEY idx_period_emp (period_id, employee_id),
   KEY idx_period_dept (period_id, dept_id),
   KEY idx_employee (employee_id),
@@ -360,6 +366,7 @@ CREATE TABLE pay_import_batch (
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at  DATETIME     NULL,
   PRIMARY KEY (id),
+  KEY idx_period_status_hash (period_id, status, file_hash),
   KEY idx_period (period_id),
   KEY idx_file_hash (file_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='导入批次';
@@ -380,23 +387,8 @@ CREATE TABLE pay_import_error (
 -- 补发/扣回：不在本期范围（更正通过"解锁期间 → 修改 → 重新锁定"实现）
 -- -------------------------------------------------------------
 
--- -------------------------------------------------------------
--- 汇总预聚合
--- -------------------------------------------------------------
-
-CREATE TABLE pay_summary_monthly (
-  id               BIGINT        NOT NULL AUTO_INCREMENT,
-  company_id       BIGINT        NOT NULL,
-  period_ym        CHAR(7)       NOT NULL,
-  dept_id          BIGINT        NOT NULL,
-  employee_count   INT           NOT NULL DEFAULT 0,
-  gross_amount     DECIMAL(18,4) NOT NULL DEFAULT 0,
-  deduction_amount DECIMAL(18,4) NOT NULL DEFAULT 0,
-  net_amount       DECIMAL(18,4) NOT NULL DEFAULT 0,
-  refreshed_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_summary (company_id, period_ym, dept_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='月度汇总（期间锁定时刷新）';
+-- 汇总预聚合表 pay_summary_monthly 已删除：
+-- 它零写零读，留着只会成为第二个真源；月度/年度汇总改为查询时按 pay_record 聚合。
 
 -- -------------------------------------------------------------
 -- 审计

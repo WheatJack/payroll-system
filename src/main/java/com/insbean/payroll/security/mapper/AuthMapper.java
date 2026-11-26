@@ -27,6 +27,22 @@ public interface AuthMapper {
     @Select("SELECT dept_id FROM sys_user WHERE id = #{id} AND deleted = 0")
     Long findDeptId(@Param("id") Long id);
 
+    @Select("SELECT real_name FROM sys_user WHERE id = #{id} AND deleted = 0")
+    String findRealName(@Param("id") Long id);
+
+    /**
+     * token 版本号。签发时写进载荷、每次解析时与库里比对，
+     * 重置密码或强制下线只需 +1，所有旧 token 立即失效（无状态 token 无法单独吊销）。
+     */
+    @Select("SELECT token_version FROM sys_user WHERE id = #{id} AND deleted = 0")
+    Integer findTokenVersion(@Param("id") Long id);
+
+    @Update("UPDATE sys_user SET token_version = token_version + 1 WHERE id = #{id}")
+    int bumpTokenVersion(@Param("id") Long id);
+
+    @Update("UPDATE sys_user SET password_hash = #{passwordHash} WHERE id = #{id} AND deleted = 0")
+    int updatePassword(@Param("id") Long id, @Param("passwordHash") String passwordHash);
+
     /** 用户通过角色拿到的全部权限点。 */
     @Select("""
             SELECT DISTINCT g.perm_code

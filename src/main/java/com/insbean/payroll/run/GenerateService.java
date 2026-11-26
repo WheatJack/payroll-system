@@ -23,12 +23,13 @@ import com.insbean.payroll.item.dto.PayItemDefDTO;
 import com.insbean.payroll.org.mapper.DeptMapper;
 import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.mapper.PeriodMapper;
+import com.insbean.payroll.record.PeriodTotalsRefresher;
 import com.insbean.payroll.record.RecordAssembler;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
-import com.insbean.payroll.run.mapper.PayRecordItemMapper;
-import com.insbean.payroll.run.mapper.PayRecordMapper;
+import com.insbean.payroll.record.mapper.PayRecordItemMapper;
+import com.insbean.payroll.record.mapper.PayRecordMapper;
 import com.insbean.payroll.run.mapper.PayRunMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -98,6 +99,7 @@ public class GenerateService {
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
     private final DataScopeEnforcer dataScope;
+    private final PeriodTotalsRefresher totalsRefresher;
     private final TransactionTemplate transactionTemplate;
 
     private final PayrollCalculator calculator = new PayrollCalculator();
@@ -116,6 +118,7 @@ public class GenerateService {
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
                            DataScopeEnforcer dataScope,
+                           PeriodTotalsRefresher totalsRefresher,
                            PlatformTransactionManager transactionManager) {
         this.periodService = periodService;
         this.periodMapper = periodMapper;
@@ -131,6 +134,7 @@ public class GenerateService {
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
         this.dataScope = dataScope;
+        this.totalsRefresher = totalsRefresher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -156,7 +160,8 @@ public class GenerateService {
             generate(period, operatorId, progress);
             closeRun(run, "SUCCESS", progress);
             periodService.markEditing(periodId, operatorId);
-            refreshPeriodTotals(period);
+            // 回写人数/合计 + 生成时的列快照（导出用，不能取当前启用科目）
+            totalsRefresher.refresh(period);
             return run.getId();
         } catch (RuntimeException e) {
             log.warn("期间 {} 生成失败: {}", periodId, e.getMessage());
@@ -378,27 +383,6 @@ public class GenerateService {
         update.setFinishedAt(LocalDateTime.now());
         update.setErrorMsg(writeProgress(progress));
         runMapper.updateById(update);
-    }
-
-    private void refreshPeriodTotals(PayPeriodEntity period) {
-        List<PayRecordEntity> records = recordMapper.selectList(Wrappers.<PayRecordEntity>lambdaQuery()
-                .eq(PayRecordEntity::getPeriodId, period.getId())
-                .eq(PayRecordEntity::getCompanyId, period.getCompanyId()));
-        BigDecimal gross = records.stream()
-                .map(PayRecordEntity::getGrossAmount)
-                .filter(java.util.Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal net = records.stream()
-                .map(PayRecordEntity::getNetAmount)
-                .filter(java.util.Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        PayPeriodEntity update = new PayPeriodEntity();
-        update.setId(period.getId());
-        update.setEmployeeCount(records.size());
-        update.setTotalGross(gross);
-        update.setTotalNet(net);
-        periodMapper.updateById(update);
     }
 
     /**

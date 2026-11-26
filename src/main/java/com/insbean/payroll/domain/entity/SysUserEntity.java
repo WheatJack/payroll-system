@@ -21,6 +21,8 @@ public class SysUserEntity {
     private Long deptId;
     private String mobileMask;
     private Integer status;
+    /** 无状态 token 版本号：重置密码时 +1，旧 token 立即失效。 */
+    private Integer tokenVersion;
     private LocalDateTime lastLoginAt;
     private Integer deleted;
 }

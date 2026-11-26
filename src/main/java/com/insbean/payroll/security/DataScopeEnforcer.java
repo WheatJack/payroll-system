@@ -112,21 +112,24 @@ public class DataScopeEnforcer {
 
     // ------------------------------------------------------------------ 查询条件下推
 
-    /** 人员列表：把数据范围拼进查询条件（报表服务同样可以直接复用）。 */
+    /**
+     * 人员列表：把数据范围拼进查询条件（报表服务同样可以直接复用）。
+     *
+     * <p><b>永远输出谓词</b>：即使是 ALL 也写一条 {@code 1 = 1}。
+     * "什么都不加"的分支是最危险的写法——调用方一旦漏写主体条件，就会静默变成全表可见，
+     * 而这种缺陷在正常路径的测试里看不出来。留下显式谓词后，
+     * 任何"条件为空"的调用都会在 code review 与日志里一眼可见。
+     */
     public void applyEmployeeFilter(LambdaQueryWrapper<EmpEmployeeEntity> wrapper) {
-        String condition = employeeScopeSql(requireUser());
-        if (condition != null) {
-            wrapper.apply(condition);
-        }
+        wrapper.apply(employeeScopeSql(requireUser()));
     }
 
-    /** 核算记录列表：按快照列过滤，历史部门的归属不会因为人员调动而变化。 */
+    /** 核算记录列表：按快照列过滤，历史部门的归属不会因为人员调动而变化。同样永远输出谓词。 */
     public void applyRecordFilter(LambdaQueryWrapper<PayRecordEntity> wrapper) {
         CurrentUser current = requireUser();
         switch (current.dataScope()) {
-            case ALL, COMPANY -> {
-                // 主体级过滤由调用方按期间的 company_id 完成，这里不再叠加
-            }
+            case ALL -> wrapper.apply("1 = 1");
+            case COMPANY -> wrapper.apply("company_id = " + current.companyId());
             case SELF -> wrapper.apply(current.employeeId() == null
                     ? "1 = 0"
                     : "employee_id = " + current.employeeId());
@@ -147,10 +150,10 @@ public class DataScopeEnforcer {
         };
     }
 
-    /** 返回 null 表示无需追加条件（ALL）。 */
+    /** 永远返回非空条件：ALL 也返回 {@code 1 = 1}，杜绝"条件为空 = 不加限制"的隐式分支。 */
     private String employeeScopeSql(CurrentUser current) {
         return switch (current.dataScope()) {
-            case ALL -> null;
+            case ALL -> "1 = 1";
             case COMPANY -> "company_id = " + current.companyId();
             case SELF -> current.employeeId() == null ? "1 = 0" : "id = " + current.employeeId();
             case DEPT -> "dept_id = " + deptIdOf(current);

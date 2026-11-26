@@ -29,4 +29,9 @@ public class PayPeriodEntity {
     private String processingOwner;
     private LocalDateTime processingExpireAt;
     private Integer version;
+    /**
+     * 生成时的工资表列快照（JSON）。
+     * 导出必须用它而不是当前启用科目：明细里可能含已停用科目，按当前字典导列会和合计对不上。
+     */
+    private String columnSnapshot;
 }

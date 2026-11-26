@@ -1,6 +1,10 @@
 package com.insbean.payroll.security;
 
 import com.insbean.payroll.common.BizException;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.insbean.payroll.domain.entity.EmpEmployeeEntity;
+import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.employee.CompProfileService;
 import com.insbean.payroll.employee.EmployeeService;
 import com.insbean.payroll.employee.dto.CompProfileSaveReq;
@@ -164,6 +168,39 @@ class DataScopeEnforcerTest extends AbstractDbTest {
         assertThatThrownBy(() -> enforcer.assertCompanyVisible(TestDb.COMPANY_DEFAULT))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("未认证");
+    }
+
+    /**
+     * 防的是"静默空操作"：如果某个范围生成了空条件，调用方一旦漏写主体条件就变成全表可见。
+     * 这里对五种范围都断言 SQL 谓词非空——ALL 也必须是显式的 {@code 1 = 1}。
+     */
+    @Test
+    void 五种数据范围都会生成非空的SQL谓词() {
+        for (String scope : List.of("ALL", "COMPANY", "DEPT_SUB", "DEPT", "SELF")) {
+            asUser(scope, selfEmployee, TestDb.DEPT_DEFAULT);
+
+            LambdaQueryWrapper<PayRecordEntity> recordFilter = Wrappers.lambdaQuery();
+            enforcer.applyRecordFilter(recordFilter);
+            assertThat(recordFilter.getSqlSegment())
+                    .as("record filter for scope %s", scope)
+                    .isNotBlank();
+
+            LambdaQueryWrapper<EmpEmployeeEntity> employeeFilter = Wrappers.lambdaQuery();
+            enforcer.applyEmployeeFilter(employeeFilter);
+            assertThat(employeeFilter.getSqlSegment())
+                    .as("employee filter for scope %s", scope)
+                    .isNotBlank();
+        }
+    }
+
+    @Test
+    void ALL范围生成的是显式谓词而不是空条件() {
+        asUser("ALL", null, TestDb.DEPT_DEFAULT);
+
+        LambdaQueryWrapper<PayRecordEntity> recordFilter = Wrappers.lambdaQuery();
+        enforcer.applyRecordFilter(recordFilter);
+
+        assertThat(recordFilter.getSqlSegment()).isNotBlank().contains("1 = 1");
     }
 
     // ------------------------------------------------------------------

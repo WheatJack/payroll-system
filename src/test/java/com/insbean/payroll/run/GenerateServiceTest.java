@@ -9,7 +9,7 @@ import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
-import com.insbean.payroll.run.mapper.PayRecordMapper;
+import com.insbean.payroll.record.mapper.PayRecordMapper;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.BeforeEach;
@@ -286,6 +286,17 @@ class GenerateServiceTest extends AbstractDbTest {
         Long december = periodService.create(new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
         generateService.startGenerate(december, OPERATOR);
         assertThat(deptNameOf(december, "E500")).isEqualTo("研发组");
+    }
+
+    @Test
+    void 生成时写入工资表列快照供导出使用() {
+        generateService.startGenerate(periodId, OPERATOR);
+
+        String snapshot = jdbc.queryForObject(
+                "SELECT column_snapshot FROM pay_period WHERE id = ?", String.class, periodId);
+
+        // 导出列必须取生成时的快照，而不是当时的启用科目
+        assertThat(snapshot).contains("BASE_SALARY").contains("SENIORITY_PAY").contains("itemCode");
     }
 
     @Test

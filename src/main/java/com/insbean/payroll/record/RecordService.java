@@ -9,9 +9,7 @@ import com.insbean.payroll.domain.entity.PayPeriodEntity;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.domain.entity.PayRecordItemEntity;
 import com.insbean.payroll.item.ItemService;
-import com.insbean.payroll.item.dto.PayItemDefDTO;
 import com.insbean.payroll.period.PeriodService;
-import com.insbean.payroll.period.mapper.PeriodMapper;
 import com.insbean.payroll.record.dto.ChangesetChange;
 import com.insbean.payroll.record.dto.ChangesetItem;
 import com.insbean.payroll.record.dto.ChangesetReq;
@@ -20,8 +18,8 @@ import com.insbean.payroll.record.dto.GridColumn;
 import com.insbean.payroll.record.dto.GridPeriod;
 import com.insbean.payroll.record.dto.GridResponse;
 import com.insbean.payroll.record.dto.GridRow;
-import com.insbean.payroll.run.mapper.PayRecordItemMapper;
-import com.insbean.payroll.run.mapper.PayRecordMapper;
+import com.insbean.payroll.record.mapper.PayRecordItemMapper;
+import com.insbean.payroll.record.mapper.PayRecordMapper;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,7 +41,7 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>合计 = 按方向分别加总明细，绝不二次舍入；有扣款项时 gross 与 deduction 分开算；</li>
  *   <li>并发编辑用 (recordId, version) 乐观锁，任一冲突整体失败并列出全部冲突行；</li>
- *   <li>写之前必须过 {@code assertWritable}，锁定/归档期间连一次 UPDATE 都不发。</li>
+ *   <li>写之前必须过 {@code assertWritableForUpdate}（行锁），锁定/归档期间连一次 UPDATE 都不发。</li>
  * </ul>
  */
 @Service
@@ -55,20 +53,23 @@ public class RecordService {
     private final ItemService itemService;
     private final PayRecordMapper recordMapper;
     private final PayRecordItemMapper recordItemMapper;
-    private final PeriodMapper periodMapper;
+    private final ColumnSnapshotFactory columnSnapshotFactory;
+    private final PeriodTotalsRefresher totalsRefresher;
     private final DataScopeEnforcer dataScope;
 
     public RecordService(PeriodService periodService,
                          ItemService itemService,
                          PayRecordMapper recordMapper,
                          PayRecordItemMapper recordItemMapper,
-                         PeriodMapper periodMapper,
+                         ColumnSnapshotFactory columnSnapshotFactory,
+                         PeriodTotalsRefresher totalsRefresher,
                          DataScopeEnforcer dataScope) {
         this.periodService = periodService;
         this.itemService = itemService;
         this.recordMapper = recordMapper;
         this.recordItemMapper = recordItemMapper;
-        this.periodMapper = periodMapper;
+        this.columnSnapshotFactory = columnSnapshotFactory;
+        this.totalsRefresher = totalsRefresher;
         this.dataScope = dataScope;
     }
 
@@ -82,11 +83,6 @@ public class RecordService {
         dataScope.assertPeriodVisible(periodId);
         PayPeriodEntity period = periodService.requirePeriod(periodId);
 
-        List<GridColumn> columns = itemService.listEnabled(period.getCompanyId()).stream()
-                .map(d -> new GridColumn(d.itemCode(), d.itemName(), d.category(),
-                        d.direction(), d.precisionScale(), d.editable()))
-                .toList();
-
         LambdaQueryWrapper<PayRecordEntity> recordQuery = Wrappers.<PayRecordEntity>lambdaQuery()
                 .eq(PayRecordEntity::getPeriodId, periodId)
                 .eq(PayRecordEntity::getCompanyId, period.getCompanyId())
@@ -96,70 +92,22 @@ public class RecordService {
         dataScope.applyRecordFilter(recordQuery);
         List<PayRecordEntity> records = recordMapper.selectList(recordQuery);
 
-        Map<Long, Map<String, String>> itemsByRecord = loadItemMaps(records);
+        List<PayRecordItemEntity> allItems = records.isEmpty()
+                ? List.of()
+                : recordItemMapper.findByRecordIds(records.stream().map(PayRecordEntity::getId).toList());
+        Map<Long, Map<String, String>> itemsByRecord = toItemMaps(allItems);
         List<GridRow> rows = records.stream()
                 .map(r -> toRow(r, itemsByRecord.getOrDefault(r.getId(), Map.of())))
                 .toList();
 
         return new GridResponse(
                 new GridPeriod(period.getId(), period.getPeriodYm(), period.getStatus()),
-                withUsedButDisabledColumns(period.getCompanyId(), columns, itemsByRecord),
+                columnSnapshotFactory.build(period.getCompanyId(), allItems),
                 rows, rows.size());
     }
 
-    /**
-     * 工资表列 = 启用科目 ∪ 本期间明细里出现过的科目。
-     *
-     * <p>科目在生成之后被停用时，只取启用科目会让明细里的键不在 columns 里，
-     * 前端按 columns 求和必然对不上合计。停用列照样展示，只是不可编辑。
-     */
-    private List<GridColumn> withUsedButDisabledColumns(Long companyId,
-                                                        List<GridColumn> enabledColumns,
-                                                        Map<Long, Map<String, String>> itemsByRecord) {
-        Set<String> known = enabledColumns.stream().map(GridColumn::itemCode)
-                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
-        Set<String> used = itemsByRecord.values().stream()
-                .flatMap(m -> m.keySet().stream())
-                .filter(code -> !known.contains(code))
-                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
-        if (used.isEmpty()) {
-            return enabledColumns;
-        }
-
-        Map<String, PayItemEntity> allItems = itemService.list(companyId, null, null).stream()
-                .collect(Collectors.toMap(PayItemDefDTO::itemCode,
-                        d -> toEntity(d), (a, b) -> a));
-
-        List<GridColumn> merged = new ArrayList<>(enabledColumns);
-        for (String code : used) {
-            PayItemEntity def = allItems.get(code);
-            merged.add(new GridColumn(
-                    code,
-                    def == null ? code : def.getItemName(),
-                    def == null ? "VARIABLE" : def.getCategory(),
-                    def == null ? 1 : def.getDirection(),
-                    def == null ? MONEY_SCALE : def.getPrecisionScale(),
-                    false));
-        }
-        return merged;
-    }
-
-    private static PayItemEntity toEntity(PayItemDefDTO dto) {
-        PayItemEntity entity = new PayItemEntity();
-        entity.setItemCode(dto.itemCode());
-        entity.setItemName(dto.itemName());
-        entity.setCategory(dto.category());
-        entity.setDirection(dto.direction());
-        entity.setPrecisionScale(dto.precisionScale());
-        return entity;
-    }
-
-    private Map<Long, Map<String, String>> loadItemMaps(List<PayRecordEntity> records) {
-        if (records.isEmpty()) {
-            return Map.of();
-        }
-        List<Long> ids = records.stream().map(PayRecordEntity::getId).toList();
-        return recordItemMapper.findByRecordIds(ids).stream()
+    private static Map<Long, Map<String, String>> toItemMaps(List<PayRecordItemEntity> items) {
+        return items.stream()
                 .collect(Collectors.groupingBy(PayRecordItemEntity::getRecordId,
                         Collectors.toMap(PayRecordItemEntity::getItemCode,
                                 i -> money(i.getAmount()), (a, b) -> a, LinkedHashMap::new)));
@@ -221,26 +169,9 @@ public class RecordService {
         List<GridRow> rows = touched.stream()
                 .map(id -> toRow(recordMapper.selectById(id), loadItemMap(id)))
                 .toList();
-        // changeset 改的是明细金额，期间合计必须同步刷新，否则列表页显示的合计永远是生成时的旧值
-        refreshPeriodTotals(period);
+        // changeset 改的是明细金额，期间合计与列快照必须同步刷新
+        totalsRefresher.refresh(period);
         return new ChangesetResult(touched.size(), rows);
-    }
-
-    private void refreshPeriodTotals(PayPeriodEntity period) {
-        List<PayRecordEntity> records = recordMapper.selectList(Wrappers.<PayRecordEntity>lambdaQuery()
-                .eq(PayRecordEntity::getPeriodId, period.getId())
-                .eq(PayRecordEntity::getCompanyId, period.getCompanyId()));
-        BigDecimal gross = records.stream().map(PayRecordEntity::getGrossAmount)
-                .filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal net = records.stream().map(PayRecordEntity::getNetAmount)
-                .filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        PayPeriodEntity update = new PayPeriodEntity();
-        update.setId(period.getId());
-        update.setEmployeeCount(records.size());
-        update.setTotalGross(gross);
-        update.setTotalNet(net);
-        periodMapper.updateById(update);
     }
 
     private void applyItem(PayPeriodEntity period, Long recordId, ChangesetItem item) {
@@ -313,9 +244,8 @@ public class RecordService {
     }
 
     private Map<String, String> loadItemMap(Long recordId) {
-        return recordItemMapper.findByRecordIds(List.of(recordId)).stream()
-                .collect(Collectors.toMap(PayRecordItemEntity::getItemCode,
-                        i -> money(i.getAmount()), (a, b) -> a, LinkedHashMap::new));
+        return toItemMaps(recordItemMapper.findByRecordIds(List.of(recordId)))
+                .getOrDefault(recordId, Map.of());
     }
 
     private static BigDecimal parseMoney(String raw, String itemCode) {

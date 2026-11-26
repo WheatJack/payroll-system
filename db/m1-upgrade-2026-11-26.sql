@@ -1,28 +1,51 @@
 -- =============================================================
--- 2026-11-26 · M1 后端增量升级
+-- 2026-11-26 · M1 后端增量升级（每个环境执行一次）
 --
--- 对「已经按旧版 schema-mysql.sql 建过表」的环境执行（幂等，可重复跑）。
+-- 对「已经按旧版 schema-mysql.sql 建过表」的环境执行。
 -- 全新环境直接执行 schema-mysql.sql 即可，不需要本文件。
 --
---   1) processing_expire_at 提升到微秒精度
---      任务租约 TTL 可能只有毫秒级；DATETIME 是秒级精度，
---      「已过期」判断会被拖到下一秒，导致快速重试全部失败。
---
---   2) pay_record.version_no 默认值 1 → 0
---      契约统一为「新建记录 version=0，每次 changeset 保存 +1」。
---      保持默认值 1 会让前端拿到的初始版本对不上，第一次保存就 409。
+-- 注意：MySQL 的 ADD COLUMN / DROP INDEX 不支持 IF NOT EXISTS，
+-- 重复执行会在已应用的语句上报「已存在 / 不存在」的错，跳过即可。
 -- =============================================================
 
+-- 1) 任务租约精度提升到微秒
+--    TTL 可能只有毫秒级；DATETIME 是秒级精度，「已过期」判断会被拖到下一秒，
+--    导致快速重试全部失败。
 ALTER TABLE pay_period
   MODIFY processing_expire_at DATETIME(6) NULL COMMENT '租约过期时间，过期可被抢占';
 
+-- 2) pay_record.version_no 默认值 1 → 0
+--    契约统一为「新建记录 version=0，每次 changeset 保存 +1」。
 ALTER TABLE pay_record
   MODIFY version_no INT NOT NULL DEFAULT 0;
 
---   3) emp_comp_profile 唯一键纳入 deleted
---      调薪不再就地 UPDATE 旧段，而是把旧段作废（deleted=1）再开新段。
---      原来的 uk(employee_id, effective_from) 会让"作废后的旧段"仍然占着那一天，
---      新段插不进去。把 deleted 纳入唯一键后，同一天可以有一条有效 + 若干条作废。
+-- 3) emp_comp_profile 唯一键纳入 deleted
+--    调薪不再就地 UPDATE 旧段，而是把旧段作废（deleted=1）再开新段。
+--    原来的 uk(employee_id, effective_from) 会让作废的旧段仍然占着那一天。
 ALTER TABLE emp_comp_profile
   DROP INDEX uk_emp_effective,
   ADD UNIQUE KEY uk_emp_effective (employee_id, effective_from, deleted);
+
+-- 4) sys_user.token_version
+--    无状态 token 的版本号：重置密码时 +1，旧 token 立即失效。
+ALTER TABLE sys_user
+  ADD COLUMN token_version INT NOT NULL DEFAULT 0 COMMENT 'token 版本号，改密码时 +1' AFTER status;
+
+-- 5) pay_record(company_id, period_ym)
+--    本主体本期间查询与跨期间报表都要走这个前缀，避免全表扫。
+ALTER TABLE pay_record
+  ADD KEY idx_company_period (company_id, period_ym);
+
+-- 6) pay_import_batch(period_id, status, file_hash)
+--    导入幂等校验按「期间 + 状态 + 文件哈希」查。
+ALTER TABLE pay_import_batch
+  ADD KEY idx_period_status_hash (period_id, status, file_hash);
+
+-- 7) pay_period.column_snapshot
+--    期间工资表导出的前提：明细可能含已停用科目，
+--    导出列必须取生成时的快照，不能取当前启用科目。
+ALTER TABLE pay_period
+  ADD COLUMN column_snapshot JSON NULL COMMENT '生成时的工资表列快照' AFTER version;
+
+-- 8) 删除零写零读的预聚合表（留空表等于留下第二个真源）
+DROP TABLE IF EXISTS pay_summary_monthly;

@@ -10,6 +10,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.List;
 import java.util.Map;
@@ -58,6 +59,16 @@ public class GlobalExceptionHandler {
             MissingServletRequestParameterException.class})
     public ResponseEntity<Result<Void>> handleBadRequest(Exception e) {
         return ResponseEntity.badRequest().body(Result.fail(400, "请求参数格式不正确"));
+    }
+
+    /**
+     * 上传超限必须是 413（Payload Too Large），不是 500。
+     * 500 会让人以为是服务端故障去查日志，实际只是文件太大，前端应直接提示用户。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Result<Void>> handleUploadTooLarge(MaxUploadSizeExceededException e) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(Result.fail(413, "上传文件超过大小上限，请拆分后重试"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

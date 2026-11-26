@@ -18,8 +18,10 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
+      # 契约允许 5 万行，5 万行 xlsx 通常 15–30MB；原来 10MB 与契约自相矛盾。
+      # 行数上限仍由 payroll.import.max-rows 控制，这里只是别让文件先被容器拒掉。
+      max-file-size: 50MB
+      max-request-size: 50MB
 
 mybatis-plus:
   configuration:

@@ -30,8 +30,8 @@ class PermissionInterceptorTest {
 
     @BeforeEach
     void setUp() {
-        tokenService = new TokenService(SECRET, 60);
         authMapper = new FakeAuthMapper();
+        tokenService = new TokenService(SECRET, 60, authMapper);
         interceptor = new PermissionInterceptor(tokenService, authMapper);
     }
 
@@ -134,6 +134,7 @@ class PermissionInterceptorTest {
     static class FakeAuthMapper implements AuthMapper {
 
         Set<String> permissions = Set.of();
+        int tokenVersion = 0;
 
         private AuthUserRow user() {
             AuthUserRow row = new AuthUserRow();
@@ -168,6 +169,27 @@ class PermissionInterceptorTest {
         @Override
         public Long findDeptId(Long id) {
             return 1L;
+        }
+
+        @Override
+        public String findRealName(Long id) {
+            return "薪酬专员";
+        }
+
+        @Override
+        public Integer findTokenVersion(Long id) {
+            return tokenVersion;
+        }
+
+        @Override
+        public int bumpTokenVersion(Long id) {
+            tokenVersion++;
+            return 1;
+        }
+
+        @Override
+        public int updatePassword(Long id, String passwordHash) {
+            return 1;
         }
 
         @Override

@@ -1,4 +1,4 @@
-package com.insbean.payroll.run.mapper;
+package com.insbean.payroll.record.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
