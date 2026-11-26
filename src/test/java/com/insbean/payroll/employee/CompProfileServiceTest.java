@@ -1,0 +1,130 @@
+package com.insbean.payroll.employee;
+
+import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.employee.dto.CompProfileDTO;
+import com.insbean.payroll.employee.dto.CompProfileItemDTO;
+import com.insbean.payroll.employee.dto.CompProfileSaveReq;
+import com.insbean.payroll.employee.dto.EmployeeSaveReq;
+import com.insbean.payroll.support.AbstractDbTest;
+import com.insbean.payroll.support.TestDb;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class CompProfileServiceTest extends AbstractDbTest {
+
+    @Autowired
+    private CompProfileService service;
+
+    @Autowired
+    private EmployeeService employeeService;
+
+    private Long empId;
+
+    @BeforeEach
+    void setUpEmployee() {
+        empId = employeeService.create(new EmployeeSaveReq(
+                null, "E001", "张三", 1, "ID_CARD", "110101199001011234", null,
+                "REGULAR", null, null, TestDb.DEPT_DEFAULT,
+                LocalDate.of(2020, 3, 1), null, null, 1, null), TestDb.COMPANY_DEFAULT);
+
+        // 现状：2025-07-01 起基本工资 8000，至今有效
+        service.save(req(empId, LocalDate.of(2025, 7, 1), "8000", "入职定薪"));
+    }
+
+    @Test
+    void 调薪后旧区间被自动截断且不重叠() {
+        service.save(req(empId, LocalDate.of(2026, 12, 1), "9500", "年度调薪"));
+
+        List<CompProfileDTO> all = service.timeline(empId);
+
+        assertThat(all).hasSize(2);
+        assertThat(all.get(0).effectiveTo()).isEqualTo(LocalDate.of(2026, 11, 30));
+        assertThat(all.get(1).effectiveFrom()).isEqualTo(LocalDate.of(2026, 12, 1));
+        assertThat(all.get(1).effectiveTo()).isNull();
+        assertThat(all.get(1).baseSalary()).isEqualByComparingTo("9500");
+    }
+
+    @Test
+    void 查询某日生效的档案() {
+        assertThat(service.effectiveAt(empId, LocalDate.of(2026, 11, 30)).baseSalary())
+                .isEqualByComparingTo("8000");
+
+        service.save(req(empId, LocalDate.of(2026, 12, 1), "9500", "年度调薪"));
+
+        assertThat(service.effectiveAt(empId, LocalDate.of(2026, 11, 30)).baseSalary())
+                .isEqualByComparingTo("8000");
+        assertThat(service.effectiveAt(empId, LocalDate.of(2026, 12, 1)).baseSalary())
+                .isEqualByComparingTo("9500");
+    }
+
+    @Test
+    void 无档案时返回空而不是抛异常() {
+        assertThat(service.effectiveAt(999L, LocalDate.of(2026, 11, 30))).isNull();
+    }
+
+    @Test
+    void 同一天再次保存是替换而不是新增() {
+        service.save(req(empId, LocalDate.of(2025, 7, 1), "8600", "更正"));
+
+        List<CompProfileDTO> all = service.timeline(empId);
+
+        assertThat(all).hasSize(1);
+        assertThat(all.get(0).baseSalary()).isEqualByComparingTo("8600");
+    }
+
+    @Test
+    void 连续多次调薪后区间互不重叠且首尾相接() {
+        service.save(req(empId, LocalDate.of(2026, 1, 1), "8500", "一季度调薪"));
+        service.save(req(empId, LocalDate.of(2026, 7, 1), "9000", "年中调薪"));
+
+        List<CompProfileDTO> all = service.timeline(empId);
+
+        assertThat(all).hasSize(3);
+        assertThat(all.get(0).effectiveFrom()).isEqualTo(LocalDate.of(2025, 7, 1));
+        assertThat(all.get(0).effectiveTo()).isEqualTo(LocalDate.of(2025, 12, 31));
+        assertThat(all.get(1).effectiveFrom()).isEqualTo(LocalDate.of(2026, 1, 1));
+        assertThat(all.get(1).effectiveTo()).isEqualTo(LocalDate.of(2026, 6, 30));
+        assertThat(all.get(2).effectiveFrom()).isEqualTo(LocalDate.of(2026, 7, 1));
+        assertThat(all.get(2).effectiveTo()).isNull();
+    }
+
+    @Test
+    void 固定津贴随档案版本化() {
+        service.save(new CompProfileSaveReq(null, empId, LocalDate.of(2026, 12, 1),
+                new BigDecimal("9500"), "年度调薪",
+                List.of(new CompProfileItemDTO("POST_ALLOW", new BigDecimal("800")))));
+
+        List<CompProfileDTO> all = service.timeline(empId);
+
+        assertThat(all.get(0).items()).isEmpty();
+        assertThat(all.get(1).items()).hasSize(1);
+        assertThat(all.get(1).items().get(0).itemCode()).isEqualTo("POST_ALLOW");
+        assertThat(all.get(1).items().get(0).amount()).isEqualByComparingTo("800");
+    }
+
+    @Test
+    void 负数基本工资被拒绝() {
+        assertThatThrownBy(() -> service.save(req(empId, LocalDate.of(2026, 12, 1), "-1", "错误数据")))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("基本工资");
+    }
+
+    @Test
+    void 金额输出统一两位小数() {
+        CompProfileDTO dto = service.effectiveAt(empId, LocalDate.of(2026, 1, 1));
+
+        assertThat(dto.baseSalary().toPlainString()).isEqualTo("8000.00");
+    }
+
+    private static CompProfileSaveReq req(Long employeeId, LocalDate from, String salary, String reason) {
+        return new CompProfileSaveReq(null, employeeId, from, new BigDecimal(salary), reason, List.of());
+    }
+}
