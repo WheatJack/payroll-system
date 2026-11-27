@@ -239,6 +239,26 @@ class RecordServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 缺少items的changeset返回400且不写数据() {
+        int versionBefore = jdbc.queryForObject(
+                "SELECT version_no FROM pay_record WHERE id = ?", Integer.class, recordId);
+
+        assertThatThrownBy(() -> recordService.applyChangeset(periodId, new ChangesetReq(List.of(
+                new ChangesetChange(recordId, versionBefore, List.of())))))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+        assertThatThrownBy(() -> recordService.applyChangeset(periodId, new ChangesetReq(List.of(
+                new ChangesetChange(recordId, versionBefore, null)))))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+
+        // 不能"200 成功但实际没写"：版本号必须保持原值
+        assertThat(jdbc.queryForObject(
+                "SELECT version_no FROM pay_record WHERE id = ?", Integer.class, recordId))
+                .isEqualTo(versionBefore);
+    }
+
+    @Test
     void 锁定与解锁同步记录状态() {
         periodService.lock(periodId, OTHER_USER);
         assertThat(recordStatus(recordId)).isEqualTo("CONFIRMED");

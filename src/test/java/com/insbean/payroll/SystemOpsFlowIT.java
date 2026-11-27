@@ -238,6 +238,62 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 系统管理员给无角色新账号分配薪酬角色成功() throws Exception {
+        String admin = login("admin");
+        long userId = createRolelessUser(admin, "newhr");
+
+        // 新账号天然没有角色，但正向赋权必须放行，否则薪酬岗永远开不出来
+        MvcResult assigned = mvc.perform(put("/api/v1/users/" + userId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleIds\":[\"1\"]}"))
+                .andReturn();
+        assertThat(assigned.getResponse().getStatus()).isEqualTo(200);
+        assertThat(objectMapper.readTree(body(assigned)).path("data").path("roleIds")
+                .get(0).asText()).isEqualTo("1");
+    }
+
+    @Test
+    void 无角色账号仍不可重置密码停用删除() throws Exception {
+        String admin = login("admin");
+        long userId = createRolelessUser(admin, "norole");
+
+        assertThat(mvc.perform(post("/api/v1/users/" + userId + "/reset-password")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"NewPassw0rd!\"}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+
+        assertThat(mvc.perform(put("/api/v1/users/" + userId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":0}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+
+        assertThat(mvc.perform(delete("/api/v1/users/" + userId)
+                        .header("Authorization", "Bearer " + admin))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+    }
+
+    /** 通过真实接口创建一个没有角色的账号，返回用户 ID。 */
+    private long createRolelessUser(String token, String username) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("companyId", "1");
+        body.put("username", username);
+        body.put("password", "Passw0rd!");
+        body.put("realName", "无角色账号");
+        body.put("status", 1);
+        body.put("roleIds", List.of());
+        MvcResult result = mvc.perform(post("/api/v1/users")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        return Long.parseLong(objectMapper.readTree(body(result)).path("data").path("id").asText());
+    }
+
+    @Test
     void 低权管理员不能降级或删除更高权账号() throws Exception {
         // hr01 只有 sys:user:edit 等权限，且数据范围被限为 COMPANY
         jdbc.update("""

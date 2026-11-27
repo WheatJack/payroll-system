@@ -148,8 +148,12 @@ public class UserAdminService {
         int adminsBefore = userMapper.countActiveAdmins();
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
-        // 低权管理员不能降级/停用/改角色更高权的账号
-        assertCanManageAccount(entity, me);
+        // 低权管理员不能降级/停用/改角色更高权的账号。
+        // 例外：给"刚创建、还没有角色"的账号分配角色是开通薪酬岗的唯一入口（F-2），
+        // 但只增加了角色、且不是在停用时才放行。
+        boolean grantingRoles = req.roleIds() != null && !req.roleIds().isEmpty();
+        boolean disabling = req.status() != null && req.status() == 0;
+        assertCanManageAccount(entity, me, grantingRoles && !disabling);
 
         if (req.status() != null && req.status() == 0 && id.equals(me.userId())) {
             throw new BizException(409, "不能停用自己的账号");
@@ -196,7 +200,7 @@ public class UserAdminService {
         }
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
-        assertCanManageAccount(entity, CurrentUser.get());
+        assertCanManageAccount(entity, CurrentUser.get(), false);
         userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         // 逻辑删除；拦截器 findById 会立即查不到该用户 → 其 token 下一次请求即 401
@@ -213,7 +217,7 @@ public class UserAdminService {
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
         // 低权管理员不能通过"重置密码再登录"接管权限更高的账号
-        assertCanManageAccount(entity, me);
+        assertCanManageAccount(entity, me, false);
         String newPassword = req == null ? null : req.newPassword();
         // 契约 minLength=8：服务层也要拦，不能只靠前端表单
         if (newPassword == null || newPassword.isBlank()) {
@@ -337,11 +341,17 @@ public class UserAdminService {
      * 目标账号的范围与权限点必须 ⊆ 操作者自身；否则需要 sys:role:grant:all。
      * 不挡这条路，前面所有防提权不变量都能被"重置密码 → 登录"绕过。
      */
-    private void assertCanManageAccount(SysUserEntity target, CurrentUser me) {
+    /**
+     * @param allowRolelessTarget 仅"给对方分配角色"的正向操作允许目标暂时没有角色。
+     *                            新账号天然无角色，若这里一律 403，"先建号再分配"会被堵死，
+     *                            薪酬岗永远开不出来；而重置密码/停用/删除仍必须走无角色即拒绝。
+     */
+    private void assertCanManageAccount(SysUserEntity target, CurrentUser me,
+                                       boolean allowRolelessTarget) {
         List<RoleRow> roles = loadRoles(userMapper.findRoleIds(target.getId()));
-        // 没有任何角色的账号处于异常状态：不能按"无权限=可管理"放行，
-        // 否则会在"角色刚被清空"的竞态窗口里被低权管理员接管
-        if (roles.isEmpty()) {
+        if (roles.isEmpty() && !allowRolelessTarget) {
+            // 没有角色的账号处于异常状态：不能按"无权限=可管理"放行，
+            // 否则会在"角色刚被清空"的竞态窗口里被低权管理员接管
             throw new BizException(403, "目标账号没有任何角色，禁止通过管理接口操作");
         }
         if (me.has(ScopeGuard.PERM_GRANT_ALL)) {

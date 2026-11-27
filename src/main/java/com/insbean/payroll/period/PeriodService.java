@@ -209,6 +209,11 @@ public class PeriodService {
         if (status != PeriodStatus.EDITING) {
             throw new BizException(409, "期间尚未生成，只有编制中的期间可以锁定");
         }
+        // 生成租约未过期时禁止锁定：否则会出现"锁定成功但首批已写、后续批次 409"的半成品期间
+        if (period.getProcessingOwner() != null && period.getProcessingExpireAt() != null
+                && period.getProcessingExpireAt().isAfter(LocalDateTime.now())) {
+            throw new BizException(409, "期间正在生成，请等待完成后锁定");
+        }
         if (period.getCompiledBy() != null && period.getCompiledBy().equals(userId)) {
             throw new BizException(400, "锁定人不能是本期间的编制人，请由他人复核锁定");
         }

@@ -125,3 +125,12 @@ CREATE TABLE IF NOT EXISTS pay_run_skip (
   PRIMARY KEY (id),
   KEY idx_run (run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='生成跳过明细';
+
+-- 16) H-4 存量回填：已锁定/已归档期间下的记录状态补成 CONFIRMED
+--    DRAFT 只代表"编制中"；历史上锁定期间没有同步状态，报表/下游会误判。
+UPDATE pay_record r
+  JOIN pay_period p ON p.id = r.period_id
+   SET r.record_status = 'CONFIRMED'
+ WHERE p.status IN ('LOCKED', 'ARCHIVED')
+   AND r.record_status = 'DRAFT'
+   AND r.deleted = 0;

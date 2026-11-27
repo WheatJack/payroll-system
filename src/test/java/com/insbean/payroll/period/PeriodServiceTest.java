@@ -46,6 +46,32 @@ class PeriodServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 租约持有中禁止锁定() {
+        periodService.tryAcquire(periodId, "gen-task", Duration.ofMinutes(10));
+
+        assertThatThrownBy(() -> periodService.lock(periodId, REVIEWER))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("正在生成")
+                .extracting("code").isEqualTo(409);
+        // 期间仍是编制中，不能被锁成"半成品已锁定"
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM pay_period WHERE id = ?", String.class, periodId))
+                .isEqualTo("EDITING");
+    }
+
+    @Test
+    void 租约过期后可以锁定() {
+        jdbc.update("""
+                UPDATE pay_period
+                   SET processing_owner = 'stale-task',
+                       processing_expire_at = DATE_SUB(NOW(6), INTERVAL 1 MINUTE)
+                 WHERE id = ?
+                """, periodId);
+
+        assertThat(periodService.lock(periodId, REVIEWER).status()).isEqualTo("LOCKED");
+    }
+
+    @Test
     void 租约被占用时第二个任务无法获取() {
         assertThat(periodService.tryAcquire(periodId, "task-1", Duration.ofMinutes(10))).isTrue();
         assertThat(periodService.tryAcquire(periodId, "task-2", Duration.ofMinutes(10))).isFalse();

@@ -219,6 +219,27 @@ class EmployeeServiceTest extends AbstractDbTest {
                 "SELECT COUNT(*) FROM emp_employee WHERE emp_no = 'E009'", Integer.class)).isZero();
     }
 
+    @Test
+    void 分页大小上限500且不静默截断() {
+        for (int i = 0; i < 210; i++) {
+            jdbc.update("""
+                    INSERT INTO emp_employee
+                      (company_id, emp_no, name, gender, id_type, id_no_cipher, id_no_hash,
+                       id_no_hash_version, id_no_mask, employee_type, dept_id, hire_date, status, deleted)
+                    VALUES (1, ?, ?, 1, 'ID_CARD', X'00', ?, 1, '****0000', 'REGULAR', 1,
+                            '2020-01-01', 1, 0)
+                    """, "BULK" + i, "批量员工" + i, String.format("%064d", i));
+        }
+
+        EmployeePageDTO page = service.page(
+                new EmployeeQuery(1, 500, null, null, null, null), TestDb.COMPANY_DEFAULT);
+
+        // 上限是 500 而不是 200：210 条必须全部返回
+        assertThat(page.records()).hasSize(210);
+        assertThat(page.size()).isEqualTo(500);
+        assertThat(new EmployeeQuery(1, 501, null, null, null, null).pageSize()).isEqualTo(500);
+    }
+
     private EmployeeSaveReq createReq(String empNo, String idNo) {
         return new EmployeeSaveReq(
                 null, empNo, "张三", 1, "ID_CARD", idNo, "13800138000",

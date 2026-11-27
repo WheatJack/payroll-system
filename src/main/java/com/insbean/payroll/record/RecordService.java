@@ -153,6 +153,10 @@ public class RecordService {
                 throw new BizException(404, "核算记录不存在或不属于该期间：" + change.recordId());
             }
             dataScope.assertRecordVisible(record);
+            // items 是变更的载体；缺失时若继续走只 bump version，会返回 200 却没写任何数据
+            if (change.items() == null || change.items().isEmpty()) {
+                throw new BizException(400, "changeset 缺少 items：" + change.recordId());
+            }
 
             int expectedVersion = change.version() == null ? 0 : change.version();
             int updated = recordMapper.update(null, Wrappers.<PayRecordEntity>lambdaUpdate()
@@ -165,15 +169,13 @@ public class RecordService {
                 continue;
             }
 
-            if (change.items() != null) {
-                for (ChangesetItem item : change.items()) {
-                    ItemChange applied = applyItem(period, change.recordId(), item);
-                    // 金额变更逐项留痕：谁在什么时候把哪一格从多少改成了多少
-                    if (applied.isChanged()) {
-                        auditService.record("RECORD", change.recordId(), "UPDATE", item.itemCode(),
-                                applied.oldValue() == null ? null : money(applied.oldValue()),
-                                money(applied.newValue()));
-                    }
+            for (ChangesetItem item : change.items()) {
+                ItemChange applied = applyItem(period, change.recordId(), item);
+                // 金额变更逐项留痕：谁在什么时候把哪一格从多少改成了多少
+                if (applied.isChanged()) {
+                    auditService.record("RECORD", change.recordId(), "UPDATE", item.itemCode(),
+                            applied.oldValue() == null ? null : money(applied.oldValue()),
+                            money(applied.newValue()));
                 }
             }
             recalcTotals(period, change.recordId());
