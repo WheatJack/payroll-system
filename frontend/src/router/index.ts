@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { resolveLandingPath } from '@/utils/landing'
 
 /**
  * 权限点（详细设计 §4.7）：
@@ -16,7 +17,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
-    redirect: '/periods',
+    // 不做静态 redirect：落地页由守卫按权限动态选择（SYS_ADMIN 没有 payroll:record:view）
     children: [
       {
         path: 'employees',
@@ -98,6 +99,12 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: '/no-access',
+    name: 'no-access',
+    component: () => import('@/views/NoAccessView.vue'),
+    meta: { title: '无可用页面' },
+  },
+  {
     path: '/403',
     name: 'forbidden',
     component: () => import('@/views/ForbiddenView.vue'),
@@ -136,6 +143,14 @@ router.beforeEach(async (to) => {
       return { name: 'login', query: { redirect: to.fullPath } }
     }
   }
+
+  // 根路径没有具体子路由：按当前账号权限挑落地页；
+  // 一个页面都进不去时给「无可用页面」兜底页，不能落到 403 形成死循环
+  if (to.path === '/') {
+    const landing = resolveLandingPath(auth.permissions)
+    return landing ? { path: landing, replace: true } : { name: 'no-access', replace: true }
+  }
+
   const perm = to.meta.perm as string | undefined
   if (perm && !auth.has(perm)) {
     return { name: 'forbidden' }

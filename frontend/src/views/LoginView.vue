@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { isApiError } from '@/api/client'
+import { resolveLandingPath } from '@/utils/landing'
 
 const router = useRouter()
 const route = useRoute()
@@ -27,8 +28,10 @@ async function submit() {
   submitting.value = true
   try {
     await auth.login(form.username, form.password)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
-    await router.replace(redirect)
+    // 不写死首页：按权限挑第一个可访问页面（系统管理员与薪酬专员入口不同）
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    const landing = resolveLandingPath(auth.permissions)
+    await router.replace(redirect || landing || '/no-access')
   } catch (error) {
     errorMessage.value = isApiError(error) ? error.message : '登录失败，请稍后重试'
   } finally {
