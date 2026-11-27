@@ -12,6 +12,7 @@ import com.insbean.payroll.period.mapper.PeriodMapper;
 import com.insbean.payroll.record.mapper.PayRecordMapper;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.setting.ConfigService;
+import com.insbean.payroll.tax.YtdService;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -47,15 +48,17 @@ public class PeriodService {
     private final DataScopeEnforcer dataScope;
     private final AuditService auditService;
     private final ConfigService configService;
+    private final YtdService ytdService;
 
     public PeriodService(PeriodMapper periodMapper, PayRecordMapper recordMapper,
                          DataScopeEnforcer dataScope, AuditService auditService,
-                         ConfigService configService) {
+                         ConfigService configService, YtdService ytdService) {
         this.periodMapper = periodMapper;
         this.recordMapper = recordMapper;
         this.dataScope = dataScope;
         this.auditService = auditService;
         this.configService = configService;
+        this.ytdService = ytdService;
     }
 
     // ------------------------------------------------------------------ 查询
@@ -243,6 +246,8 @@ public class PeriodService {
         periodMapper.updateById(period);
         // 锁定即确认：记录状态同步为 CONFIRMED，报表/下游据此区分"已确认的工资"
         syncRecordStatus(periodId, "DRAFT", "CONFIRMED");
+        // 锁定即把本期累计进个税台账（同一事务，失败一起回滚）
+        ytdService.accumulate(period, false);
         // 锁定是高危动作，必须留痕（谁在什么时候锁了哪一期）
         auditService.record("PERIOD", periodId, "LOCK", "status", status.name(), PeriodStatus.LOCKED.name());
         return toDto(period);
@@ -270,6 +275,8 @@ public class PeriodService {
         periodMapper.updateById(period);
         // 解锁回退为编制中，记录状态随之回到 DRAFT
         syncRecordStatus(periodId, "CONFIRMED", "DRAFT");
+        // 解锁把本期从累计台账减回，保证重算可逆
+        ytdService.accumulate(period, true);
         // 解锁是最高危的动作（重开已锁定期间），原因必须进审计
         auditService.record("PERIOD", periodId, "UNLOCK", "unlock_reason",
                 PeriodStatus.LOCKED.name(), reason.trim());

@@ -152,3 +152,79 @@ INSERT IGNORE INTO sys_role_grant (role_id, perm_code)
 SELECT r.id, 'payroll:sensitive:view'
   FROM sys_role r
  WHERE r.company_id = 1 AND r.role_code = 'PAYROLL_CLERK' AND r.deleted = 0;
+
+-- 20) 个税与社保公积金：5 张表 + 3 个扣款科目 + 参数种子
+CREATE TABLE IF NOT EXISTS pay_tax_bracket (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  year_min DECIMAL(18,2) NOT NULL,
+  year_max DECIMAL(18,2) NULL,
+  rate DECIMAL(6,4) NOT NULL,
+  quick_deduction DECIMAL(18,2) NOT NULL DEFAULT 0,
+  sort_no INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (id), KEY idx_range (year_min, year_max)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工资薪金预扣率表';
+
+CREATE TABLE IF NOT EXISTS pay_insurance_param (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  city_code VARCHAR(32) NOT NULL, city_name VARCHAR(64) NOT NULL,
+  insurance_type VARCHAR(32) NOT NULL, personal_rate DECIMAL(6,4) NOT NULL,
+  base_min DECIMAL(18,2) NOT NULL, base_max DECIMAL(18,2) NOT NULL,
+  extra_amount DECIMAL(18,2) NOT NULL DEFAULT 0, effective_from DATE NOT NULL,
+  status TINYINT NOT NULL DEFAULT 1,
+  PRIMARY KEY (id), UNIQUE KEY uk_city_type_from (city_code, insurance_type, effective_from)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社保公积金参数';
+
+CREATE TABLE IF NOT EXISTS emp_social_insurance (
+  id BIGINT NOT NULL AUTO_INCREMENT, employee_id BIGINT NOT NULL,
+  city_code VARCHAR(32) NOT NULL, social_base DECIMAL(18,2) NULL,
+  housing_fund_rate DECIMAL(6,4) NULL, effective_from DATE NOT NULL,
+  effective_to DATE NULL, created_by BIGINT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id), UNIQUE KEY uk_emp_from (employee_id, effective_from),
+  KEY idx_emp_range (employee_id, effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工参保信息';
+
+CREATE TABLE IF NOT EXISTS emp_special_deduction (
+  id BIGINT NOT NULL AUTO_INCREMENT, employee_id BIGINT NOT NULL,
+  deduction_type VARCHAR(32) NOT NULL, monthly_amount DECIMAL(18,2) NOT NULL,
+  effective_from DATE NOT NULL, effective_to DATE NULL, remark VARCHAR(255) NULL,
+  PRIMARY KEY (id), UNIQUE KEY uk_emp_type_from (employee_id, deduction_type, effective_from),
+  KEY idx_emp_range (employee_id, effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='专项附加扣除';
+
+CREATE TABLE IF NOT EXISTS pay_ytd (
+  id BIGINT NOT NULL AUTO_INCREMENT, employee_id BIGINT NOT NULL,
+  tax_year INT NOT NULL, company_id BIGINT NOT NULL,
+  cum_income DECIMAL(18,2) NOT NULL DEFAULT 0, cum_social DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_fund DECIMAL(18,2) NOT NULL DEFAULT 0, cum_special_deduction DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_tax DECIMAL(18,2) NOT NULL DEFAULT 0, last_period_ym CHAR(7) NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id), UNIQUE KEY uk_emp_year (employee_id, tax_year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='个税年度累计台账';
+
+INSERT IGNORE INTO pay_tax_bracket (year_min, year_max, rate, quick_deduction, sort_no) VALUES
+  (0, 36000, 0.0300, 0, 10), (36000, 144000, 0.1000, 2520, 20),
+  (144000, 300000, 0.2000, 16920, 30), (300000, 420000, 0.2500, 31920, 40),
+  (420000, 660000, 0.3000, 52920, 50), (660000, 960000, 0.3500, 85920, 60),
+  (960000, NULL, 0.4500, 181920, 70);
+
+INSERT IGNORE INTO pay_insurance_param
+  (city_code, city_name, insurance_type, personal_rate, base_min, base_max, extra_amount, effective_from, status) VALUES
+  ('BJ','北京','PENSION',0.0800,6821,35283,0,'2025-01-01',1),
+  ('BJ','北京','MEDICAL',0.0200,6821,35283,3,'2025-01-01',1),
+  ('BJ','北京','UNEMPLOYMENT',0.0050,6821,35283,0,'2025-01-01',1),
+  ('BJ','北京','HOUSING_FUND',0.1200,2420,35283,0,'2025-01-01',1),
+  ('SH','上海','PENSION',0.0800,7384,36921,0,'2025-01-01',1),
+  ('SH','上海','MEDICAL',0.0200,7384,36921,0,'2025-01-01',1),
+  ('SH','上海','UNEMPLOYMENT',0.0050,7384,36921,0,'2025-01-01',1),
+  ('SH','上海','HOUSING_FUND',0.0700,2690,36921,0,'2025-01-01',1),
+  ('SZ','深圳','PENSION',0.0800,2360,38892,0,'2025-01-01',1),
+  ('SZ','深圳','MEDICAL',0.0200,2360,38892,0,'2025-01-01',1),
+  ('SZ','深圳','UNEMPLOYMENT',0.0030,2360,38892,0,'2025-01-01',1),
+  ('SZ','深圳','HOUSING_FUND',0.0500,2360,38892,0,'2025-01-01',1);
+
+INSERT IGNORE INTO pay_item (company_id, item_code, item_name, category, direction, data_type,
+                             precision_scale, include_in_gross, editable, importable, sort_no, status) VALUES
+  (0,'SOCIAL_INS','社保个人','COMPUTED',2,'AMOUNT',2,0,0,0,80,1),
+  (0,'HOUSING_FUND','公积金个人','COMPUTED',2,'AMOUNT',2,0,0,0,82,1),
+  (0,'TAX','个人所得税','COMPUTED',2,'AMOUNT',2,0,0,0,84,1);

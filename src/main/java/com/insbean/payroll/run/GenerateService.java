@@ -34,6 +34,10 @@ import com.insbean.payroll.record.RecordAssembler;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.setting.ConfigService;
+import com.insbean.payroll.tax.PayYtdEntity;
+import com.insbean.payroll.tax.TaxService;
+import com.insbean.payroll.tax.YtdService;
+import com.insbean.payroll.tax.mapper.PayYtdMapper;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
 import com.insbean.payroll.run.dto.RunSkipDetail;
@@ -57,6 +61,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.YearMonth;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -113,6 +118,8 @@ public class GenerateService {
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
     private final ConfigService configService;
+    private final TaxService taxService;
+    private final PayYtdMapper ytdMapper;
     private final AuditService auditService;
     private final DataScopeEnforcer dataScope;
     private final PeriodTotalsRefresher totalsRefresher;
@@ -135,6 +142,8 @@ public class GenerateService {
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
                            ConfigService configService,
+                           TaxService taxService,
+                           PayYtdMapper ytdMapper,
                            AuditService auditService,
                            DataScopeEnforcer dataScope,
                            PeriodTotalsRefresher totalsRefresher,
@@ -154,6 +163,8 @@ public class GenerateService {
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
         this.configService = configService;
+        this.taxService = taxService;
+        this.ytdMapper = ytdMapper;
         this.auditService = auditService;
         this.dataScope = dataScope;
         this.totalsRefresher = totalsRefresher;
@@ -367,6 +378,25 @@ public class GenerateService {
                         payableDays,
                         itemDefs, fixedItems, variableItems,
                         payableDaysDivisor, seniorityPayPerYear));
+
+                // 社保/公积金/个税在领域计算之后、落库之前算：依赖参数表与累计台账
+                TaxService.InsuranceResult insurance = taxService.insurance(
+                        emp.getId(), period.getPeriodYm(), periodEnd, result.grossAmount());
+                BigDecimal special = taxService.specialDeduction(emp.getId(), periodEnd);
+                int taxYear = YearMonth.parse(period.getPeriodYm()).getYear();
+                PayYtdEntity ytd = ytdMapper.findByEmployeeAndYear(emp.getId(), taxYear);
+                BigDecimal cumIncome = nvl(ytd == null ? null : ytd.getCumIncome())
+                        .add(result.grossAmount());
+                BigDecimal cumSocial = nvl(ytd == null ? null : ytd.getCumSocial())
+                        .add(insurance.social());
+                BigDecimal cumFund = nvl(ytd == null ? null : ytd.getCumFund())
+                        .add(insurance.fund());
+                BigDecimal cumSpecial = nvl(ytd == null ? null : ytd.getCumSpecialDeduction())
+                        .add(special);
+                int months = taxService.monthsInYear(period.getPeriodYm(), emp.getHireDate());
+                BigDecimal tax = taxService.computeTax(months, cumIncome, cumSocial, cumFund,
+                        cumSpecial, nvl(ytd == null ? null : ytd.getCumTax()));
+                result = appendDeductions(result, itemDefs, insurance.social(), insurance.fund(), tax);
             } catch (RuntimeException e) {
                 progress.errors.add(new RunErrorDTO(emp.getEmpNo(), "计算失败：" + e.getMessage()));
                 progress.failed++;
@@ -495,6 +525,42 @@ public class GenerateService {
                 .map(PayItemResult::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return new PayrollResult(List.copyOf(items), gross, deduction, gross.subtract(deduction));
+    }
+
+    /** 把社保/公积金/个税作为扣款明细写进结果（科目存在时才加）。 */
+    private PayrollResult appendDeductions(PayrollResult result, Map<String, PayItemDef> itemDefs,
+                                           BigDecimal social, BigDecimal fund, BigDecimal tax) {
+        Map<String, PayItemResult> byCode = new LinkedHashMap<>();
+        result.items().forEach(i -> byCode.put(i.code(), i));
+        addDeduction(byCode, itemDefs, YtdService.SOCIAL_INS, social);
+        addDeduction(byCode, itemDefs, YtdService.HOUSING_FUND, fund);
+        addDeduction(byCode, itemDefs, YtdService.TAX, tax);
+
+        List<PayItemResult> items = new ArrayList<>(byCode.values());
+        BigDecimal gross = items.stream()
+                .filter(i -> i.direction() == PayDirection.INCREASE && i.includeInGross())
+                .map(PayItemResult::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal deduction = items.stream()
+                .filter(i -> i.direction() == PayDirection.DECREASE)
+                .map(PayItemResult::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new PayrollResult(List.copyOf(items), gross, deduction, gross.subtract(deduction));
+    }
+
+    private static void addDeduction(Map<String, PayItemResult> byCode,
+                                     Map<String, PayItemDef> itemDefs,
+                                     String code, BigDecimal amount) {
+        PayItemDef def = itemDefs.get(code);
+        if (def == null) {
+            return;
+        }
+        byCode.put(code, new PayItemResult(code, def.name(), PayCategory.COMPUTED,
+                PayDirection.DECREASE, TaxService.round2(amount), PaySource.COMPUTED, false));
+    }
+
+    private static BigDecimal nvl(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     /** 保留明细的来源（MANUAL/IMPORT）；未知值按手工处理，宁可保留也不丢。 */

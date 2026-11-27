@@ -31,6 +31,8 @@ public class TestDb {
 
     private static final List<String> TABLES = List.of(
             "emp_comp_profile_item", "emp_comp_profile", "emp_employment", "emp_employee",
+            "pay_ytd", "emp_special_deduction", "emp_social_insurance",
+            "pay_insurance_param", "pay_tax_bracket",
             "pay_record_item", "pay_record", "pay_run_skip", "pay_run", "pay_period",
             "pay_import_error", "pay_import_batch", "pay_audit_log", "sys_config",
             "pay_item", "sys_user_role", "sys_role_grant", "sys_role", "sys_user",
@@ -80,7 +82,10 @@ public class TestDb {
                   (6, 0, 'OTHER_BONUS',   '其他奖金', 'VARIABLE', 1, 'AMOUNT', 2, 1, 1, 1,  55, 1),
                   (7, 0, 'ATT_DEDUCT',    '考勤扣款', 'VARIABLE', 2, 'AMOUNT', 2, 1, 1, 1,  70, 1),
                   (8, 0, 'OTHER_DEDUCT',  '其他扣款', 'VARIABLE', 2, 'AMOUNT', 2, 1, 1, 1,  75, 1),
-                  (9, 0, 'ADJ_ROUNDING',  '尾差调整', 'COMPUTED', 1, 'AMOUNT', 2, 1, 0, 0, 999, 1)
+                  (9, 0, 'ADJ_ROUNDING',  '尾差调整', 'COMPUTED', 1, 'AMOUNT', 2, 1, 0, 0, 999, 1),
+                  (10, 0, 'SOCIAL_INS',   '社保个人', 'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  80, 1),
+                  (11, 0, 'HOUSING_FUND', '公积金个人', 'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  82, 1),
+                  (12, 0, 'TAX',          '个人所得税', 'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  84, 1)
                 """);
 
         jdbc.update("""
@@ -113,6 +118,27 @@ public class TestDb {
                 """, hash, hash, hash);
 
         jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (1, 1), (2, 2), (3, 4)");
+
+        jdbc.update("""
+                INSERT INTO pay_tax_bracket (year_min, year_max, rate, quick_deduction, sort_no) VALUES
+                  (0, 36000, 0.0300, 0, 10),
+                  (36000, 144000, 0.1000, 2520, 20),
+                  (144000, 300000, 0.2000, 16920, 30),
+                  (300000, 420000, 0.2500, 31920, 40),
+                  (420000, 660000, 0.3000, 52920, 50),
+                  (660000, 960000, 0.3500, 85920, 60),
+                  (960000, NULL, 0.4500, 181920, 70)
+                """);
+
+        jdbc.update("""
+                INSERT INTO pay_insurance_param
+                  (city_code, city_name, insurance_type, personal_rate, base_min, base_max,
+                   extra_amount, effective_from, status) VALUES
+                  ('BJ', '北京', 'PENSION',      0.0800, 6821, 35283, 0, '2025-01-01', 1),
+                  ('BJ', '北京', 'MEDICAL',      0.0200, 6821, 35283, 3, '2025-01-01', 1),
+                  ('BJ', '北京', 'UNEMPLOYMENT', 0.0050, 6821, 35283, 0, '2025-01-01', 1),
+                  ('BJ', '北京', 'HOUSING_FUND', 0.1200, 2420, 35283, 0, '2025-01-01', 1)
+                """);
 
         jdbc.update("""
                 INSERT INTO sys_config (config_key, config_value, value_type, description, editable) VALUES

@@ -46,6 +46,26 @@ public interface PayRecordMapper extends BaseMapper<PayRecordEntity> {
             """)
     List<Map<String, Object>> aggregateByPeriod(@Param(Constants.WRAPPER) Wrapper<PayRecordEntity> wrapper);
 
+    /**
+     * 员工最近 12 个已锁定期间的平均应发：社保基数默认值。
+     * 无历史（新入职）返回 NULL，由调用方回退当月应发。
+     */
+    @Select("""
+            SELECT AVG(gross_amount) FROM (
+              SELECT r.gross_amount
+                FROM pay_record r
+                JOIN pay_period p ON p.id = r.period_id
+               WHERE r.employee_id = #{employeeId}
+                 AND r.deleted = 0
+                 AND r.period_ym < #{periodYm}
+                 AND p.status IN ('LOCKED', 'ARCHIVED')
+               ORDER BY r.period_ym DESC
+               LIMIT 12
+            ) recent
+            """)
+    java.math.BigDecimal averageRecentGross(@Param("employeeId") Long employeeId,
+                                            @Param("periodYm") String periodYm);
+
     /** 集团级查重：同一年月该员工是否有有效记录（可能属于任何主体）。 */
     @Select("""
             SELECT company_id FROM pay_record

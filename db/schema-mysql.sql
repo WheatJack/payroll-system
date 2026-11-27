@@ -427,6 +427,80 @@ CREATE TABLE sys_config (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统参数（可在线调整的业务规则）';
 
 -- -------------------------------------------------------------
+-- 个税与社保公积金
+-- -------------------------------------------------------------
+
+CREATE TABLE pay_tax_bracket (
+  id              BIGINT        NOT NULL AUTO_INCREMENT,
+  year_min        DECIMAL(18,2) NOT NULL COMMENT '累计应纳税所得额下限（含）',
+  year_max        DECIMAL(18,2) NULL COMMENT '上限（不含），NULL=无上限',
+  rate            DECIMAL(6,4)  NOT NULL COMMENT '预扣率，如 0.0300',
+  quick_deduction DECIMAL(18,2) NOT NULL DEFAULT 0 COMMENT '速算扣除数',
+  sort_no         INT           NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY idx_range (year_min, year_max)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工资薪金预扣率表';
+
+CREATE TABLE pay_insurance_param (
+  id             BIGINT        NOT NULL AUTO_INCREMENT,
+  city_code      VARCHAR(32)   NOT NULL,
+  city_name      VARCHAR(64)   NOT NULL,
+  insurance_type VARCHAR(32)   NOT NULL COMMENT 'PENSION/MEDICAL/UNEMPLOYMENT/HOUSING_FUND',
+  personal_rate  DECIMAL(6,4)  NOT NULL,
+  base_min       DECIMAL(18,2) NOT NULL,
+  base_max       DECIMAL(18,2) NOT NULL,
+  extra_amount   DECIMAL(18,2) NOT NULL DEFAULT 0 COMMENT '固定附加，如医疗大病 3 元',
+  effective_from DATE          NOT NULL,
+  status         TINYINT       NOT NULL DEFAULT 1,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_city_type_from (city_code, insurance_type, effective_from)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社保公积金参数';
+
+CREATE TABLE emp_social_insurance (
+  id                 BIGINT        NOT NULL AUTO_INCREMENT,
+  employee_id        BIGINT        NOT NULL,
+  city_code          VARCHAR(32)   NOT NULL,
+  social_base        DECIMAL(18,2) NULL COMMENT 'NULL=按规则自动计算',
+  housing_fund_rate  DECIMAL(6,4)  NULL COMMENT 'NULL=用城市默认',
+  effective_from     DATE          NOT NULL,
+  effective_to       DATE          NULL,
+  created_by         BIGINT        NULL,
+  created_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_emp_from (employee_id, effective_from),
+  KEY idx_emp_range (employee_id, effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工参保信息';
+
+CREATE TABLE emp_special_deduction (
+  id             BIGINT        NOT NULL AUTO_INCREMENT,
+  employee_id    BIGINT        NOT NULL,
+  deduction_type VARCHAR(32)   NOT NULL COMMENT 'CHILD_EDU/INFANT_CARE/CONTINUE_EDU/HOUSING_LOAN/HOUSING_RENT/ELDERLY_CARE',
+  monthly_amount DECIMAL(18,2) NOT NULL,
+  effective_from DATE          NOT NULL,
+  effective_to   DATE          NULL,
+  remark         VARCHAR(255)  NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_emp_type_from (employee_id, deduction_type, effective_from),
+  KEY idx_emp_range (employee_id, effective_from, effective_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='专项附加扣除';
+
+CREATE TABLE pay_ytd (
+  id                    BIGINT        NOT NULL AUTO_INCREMENT,
+  employee_id           BIGINT        NOT NULL,
+  tax_year              INT           NOT NULL,
+  company_id            BIGINT        NOT NULL,
+  cum_income            DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_social            DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_fund              DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_special_deduction DECIMAL(18,2) NOT NULL DEFAULT 0,
+  cum_tax               DECIMAL(18,2) NOT NULL DEFAULT 0,
+  last_period_ym        CHAR(7)       NULL,
+  updated_at            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_emp_year (employee_id, tax_year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='个税年度累计台账';
+
+-- -------------------------------------------------------------
 -- 审计
 -- -------------------------------------------------------------
 
@@ -465,7 +539,10 @@ INSERT INTO pay_item (company_id, item_code, item_name, category, direction, dat
   (0, 'OTHER_BONUS',   '其他奖金',   'VARIABLE', 1, 'AMOUNT', 2, 1, 1, 1,  55),
   (0, 'ATT_DEDUCT',    '考勤扣款',   'VARIABLE', 2, 'AMOUNT', 2, 1, 1, 1,  70),
   (0, 'OTHER_DEDUCT',  '其他扣款',   'VARIABLE', 2, 'AMOUNT', 2, 1, 1, 1,  75),
-  (0, 'ADJ_ROUNDING',  '尾差调整',   'COMPUTED', 1, 'AMOUNT', 2, 1, 0, 0, 999);
+  (0, 'ADJ_ROUNDING',  '尾差调整',   'COMPUTED', 1, 'AMOUNT', 2, 1, 0, 0, 999),
+  (0, 'SOCIAL_INS',    '社保个人',   'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  80),
+  (0, 'HOUSING_FUND',  '公积金个人', 'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  82),
+  (0, 'TAX',           '个人所得税', 'COMPUTED', 2, 'AMOUNT', 2, 0, 0, 0,  84);
 
 -- 内置角色
 -- SYS_ADMIN 是"全新安装后的第一个管理员"：没有它，部署完没有任何人能进入
@@ -491,6 +568,30 @@ INSERT INTO sys_role_grant (role_id, perm_code) VALUES
   (5, 'sys:role:view'), (5, 'sys:role:edit'), (5, 'sys:role:grant:all'),
   (5, 'sys:dept:edit'), (5, 'sys:company:edit'),
   (5, 'sys:config:view'), (5, 'sys:config:edit');
+
+INSERT INTO pay_tax_bracket (year_min, year_max, rate, quick_deduction, sort_no) VALUES
+  (0, 36000, 0.0300, 0, 10),
+  (36000, 144000, 0.1000, 2520, 20),
+  (144000, 300000, 0.2000, 16920, 30),
+  (300000, 420000, 0.2500, 31920, 40),
+  (420000, 660000, 0.3000, 52920, 50),
+  (660000, 960000, 0.3500, 85920, 60),
+  (960000, NULL, 0.4500, 181920, 70);
+
+INSERT INTO pay_insurance_param
+  (city_code, city_name, insurance_type, personal_rate, base_min, base_max, extra_amount, effective_from, status) VALUES
+  ('BJ', '北京', 'PENSION',      0.0800, 6821, 35283, 0,    '2025-01-01', 1),
+  ('BJ', '北京', 'MEDICAL',      0.0200, 6821, 35283, 3,    '2025-01-01', 1),
+  ('BJ', '北京', 'UNEMPLOYMENT', 0.0050, 6821, 35283, 0,    '2025-01-01', 1),
+  ('BJ', '北京', 'HOUSING_FUND', 0.1200, 2420, 35283, 0,    '2025-01-01', 1),
+  ('SH', '上海', 'PENSION',      0.0800, 7384, 36921, 0,    '2025-01-01', 1),
+  ('SH', '上海', 'MEDICAL',      0.0200, 7384, 36921, 0,    '2025-01-01', 1),
+  ('SH', '上海', 'UNEMPLOYMENT', 0.0050, 7384, 36921, 0,    '2025-01-01', 1),
+  ('SH', '上海', 'HOUSING_FUND', 0.0700, 2690, 36921, 0,    '2025-01-01', 1),
+  ('SZ', '深圳', 'PENSION',      0.0800, 2360, 38892, 0,    '2025-01-01', 1),
+  ('SZ', '深圳', 'MEDICAL',      0.0200, 2360, 38892, 0,    '2025-01-01', 1),
+  ('SZ', '深圳', 'UNEMPLOYMENT', 0.0030, 2360, 38892, 0,    '2025-01-01', 1),
+  ('SZ', '深圳', 'HOUSING_FUND', 0.0500, 2360, 38892, 0,    '2025-01-01', 1);
 
 INSERT INTO sys_config (config_key, config_value, value_type, description, editable) VALUES
   ('payroll.monthly-payable-days', '21.75', 'DECIMAL',
