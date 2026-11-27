@@ -45,6 +45,7 @@ info:
        - `M1` 已交付（人员、薪酬档案、工资项、期间、生成、编制台、重复检测）；
        - `M1.5` 为第二阶段（汇总查询与导出、变动数据导入、系统管理）；
        - `M2` 为更远期能力，本期不实现。
+       - `M2.5` 为后续增量（人员批量导入、证件号按需查看）。
     10. **文件下载例外**：导入模板、错误报告与报表导出是二进制附件
         （`Content-Disposition`），成功时不使用统一响应包；**失败时仍返回
         JSON 统一响应包**，`code` 与 HTTP 状态码一致。其余端点一律使用统一响应包。
@@ -75,7 +76,7 @@ tags:
   - name: 编制台
     description: 全量工资表与 changeset 批量保存
   - name: 导入
-    description: M1.5 能力：变动数据导入（模板、预校验、提交、错误报告）
+    description: M1.5 变动数据导入；M2.5 人员批量导入
   - name: 报表
     description: M1.5 能力：月度/年度汇总查询与导出
   - name: 系统管理
@@ -342,7 +343,7 @@ paths:
     get:
       tags: [人员]
       summary: 人员详情
-      description: 证件号/手机号只返回掩码，不提供明文出口。
+      description: 证件号/手机号只返回掩码；明文经 `GET /employees/{id}/sensitive` 单独获取。
       operationId: getEmployee
       x-milestone: M1
       parameters:
@@ -391,6 +392,33 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees/{id}/sensitive:
+    get:
+      tags: [人员]
+      summary: 查看证件号与手机号明文
+      description: |
+        需要 `payroll:sensitive:view`（高危）。返回证件号与手机号明文，前端必须二次确认。
+        **每次调用都写审计日志**（记录操作人、员工 ID、时间与来源），审计内容不含明文。
+      operationId: getEmployeeSensitive
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 证件号与手机号明文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultEmployeeSensitive'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -994,6 +1022,109 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/employee-template:
+    get:
+      tags: [导入]
+      summary: 下载人员导入模板
+      description: |
+        需要 `payroll:import:submit`。返回二进制 xlsx，不使用统一响应包。
+        模板列固定为：工号 | 姓名 | 性别 | 员工类型 | 证件类型 | 证件号码 | 手机号 |
+        部门编码 | 职级 | 岗位 | 入职日期 | 参加工作时间 | 基本工资。
+      operationId: downloadEmployeeImportTemplate
+      x-milestone: M2.5
+      responses:
+        '200':
+          description: xlsx 人员导入模板
+          headers:
+            Content-Disposition:
+              description: 附件文件名
+              schema:
+                type: string
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/employees/validate:
+    post:
+      tags: [导入]
+      summary: 人员导入预校验
+      description: |
+        需要 `payroll:import:submit`。**不写入人员主数据**；持久化批次、错误行与
+        原始文件，提交时按批次重放并重新校验。响应结构与变动工资导入预校验一致
+        （`batchId` / `totalRows` / `successRows` / `failRows` / `errors`）。
+      operationId: validateEmployeeImport
+      x-milestone: M2.5
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: xlsx 文件，≤ 50MB、≤ 5 万行
+      responses:
+        '200':
+          description: 预校验结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportValidate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/import/employees/{batchId}/commit:
+    post:
+      tags: [导入]
+      summary: 提交人员导入
+      description: |
+        需要 `payroll:import:submit`。事务内 upsert 人员主数据；
+        **`failRows > 0` 时禁止提交**，返回 409 且 `data.failRows` 为失败行数。
+      operationId: commitEmployeeImport
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/BatchIdPath'
+      responses:
+        '200':
+          description: 提交结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportCommit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: 预校验存在失败行（`data.failRows` 给出数量）或文件已提交
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultImportCommitConflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1840,6 +1971,7 @@ components:
         - 核算：`payroll:record:view`、`payroll:record:edit`
         - 期间：`payroll:period:lock`、`payroll:period:unlock`
         - 导入导出：`payroll:import:submit`、`payroll:export`
+        - 敏感字段：`payroll:sensitive:view`（高危，每次查看写审计）
         - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
           `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
           `sys:config:view`、`sys:config:edit`
@@ -1850,6 +1982,7 @@ components:
         - 'payroll:period:unlock'
         - 'payroll:import:submit'
         - 'payroll:export'
+        - 'payroll:sensitive:view'
         - 'sys:user:view'
         - 'sys:user:edit'
         - 'sys:role:view'
@@ -2159,6 +2292,19 @@ components:
           type: string
           nullable: true
           maxLength: 255
+
+    EmployeeSensitive:
+      type: object
+      description: 证件号与手机号明文；仅 `payroll:sensitive:view` 可获取，每次调用写审计。
+      required: [idNo, mobile]
+      properties:
+        idNo:
+          type: string
+          maxLength: 32
+        mobile:
+          type: string
+          nullable: true
+          maxLength: 20
 
     EmployeeCreateRequest:
       type: object
@@ -3491,6 +3637,18 @@ components:
           example: ok
         data:
           $ref: '#/components/schemas/Employee'
+
+    ResultEmployeeSensitive:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/EmployeeSensitive'
 
     ResultCompProfileList:
       type: object
