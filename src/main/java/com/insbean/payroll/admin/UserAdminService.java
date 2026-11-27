@@ -97,7 +97,8 @@ public class UserAdminService {
 
         Page<SysUserEntity> page = userMapper.selectPage(new Page<>(current, size), query);
         List<UserDTO> records = toDtos(page.getRecords());
-        return new UserPageDTO(records, page.getTotal(), page.getCurrent(), page.getSize());
+        return new UserPageDTO(records, (int) page.getTotal(),
+                (int) page.getCurrent(), (int) page.getSize());
     }
 
     // ------------------------------------------------------------------ 新增 / 修改 / 删除

@@ -301,7 +301,7 @@ public class EmployeeService {
                 new Page<>(query.pageNo(), query.pageSize()), wrapper);
         return new EmployeePageDTO(
                 page.getRecords().stream().map(this::toDto).toList(),
-                page.getTotal(),
+                (int) page.getTotal(),
                 (int) page.getCurrent(),
                 (int) page.getSize());
     }

@@ -160,6 +160,25 @@ class PayrollFlowIT extends AbstractDbTest {
         assertThat(row.path("seniorityYears").asText()).isEqualTo("6.00");
     }
 
+    @Test
+    void 分页计数以JSON数字返回() throws Exception {
+        String token = login("hr01");
+        createEmployee(token, "E001", ID_NO);
+
+        JsonNode employees = getJson("/api/v1/employees", token);
+        // total/current/size 是计数不是 ID：字符串会让前端 ElPagination 整块报错
+        assertThat(employees.path("total").isNumber()).isTrue();
+        assertThat(employees.path("current").isNumber()).isTrue();
+        assertThat(employees.path("size").isNumber()).isTrue();
+        assertThat(employees.path("total").asInt()).isEqualTo(1);
+
+        String admin = login("admin");
+        JsonNode users = getJson("/api/v1/users", admin);
+        assertThat(users.path("total").isNumber()).isTrue();
+        assertThat(users.path("current").isNumber()).isTrue();
+        assertThat(users.path("size").isNumber()).isTrue();
+    }
+
     private String login(String username) throws Exception {
         JsonNode data = postJson("/api/v1/auth/login", null, Map.of(
                 "username", username,
