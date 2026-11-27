@@ -1,9 +1,7 @@
 package com.insbean.payroll.report;
 
 import com.insbean.payroll.common.Result;
-import com.insbean.payroll.report.dto.AnnualReportRow;
 import com.insbean.payroll.report.dto.ExportRequest;
-import com.insbean.payroll.report.dto.MonthlyReportRow;
 import com.insbean.payroll.report.dto.ReportQuery;
 import com.insbean.payroll.security.RequirePerm;
 import jakarta.servlet.http.HttpServletResponse;
@@ -37,7 +35,7 @@ public class ReportController {
 
     @RequirePerm("payroll:record:view")
     @GetMapping("/monthly")
-    public Result<List<MonthlyReportRow>> monthly(@RequestParam String periodYm,
+    public Result<ReportService.MonthlyReportResult> monthly(@RequestParam String periodYm,
                                                   @RequestParam(required = false) Long companyId,
                                                   @RequestParam(required = false) Long deptId) {
         return Result.ok(reportService.monthly(ReportQuery.monthly(periodYm, companyId, deptId)));
@@ -45,7 +43,7 @@ public class ReportController {
 
     @RequirePerm("payroll:record:view")
     @GetMapping("/annual")
-    public Result<List<AnnualReportRow>> annual(@RequestParam String year,
+    public Result<ReportService.AnnualReportResult> annual(@RequestParam String year,
                                                 @RequestParam String groupBy,
                                                 @RequestParam(required = false) Long companyId,
                                                 @RequestParam(required = false) Long deptId) {

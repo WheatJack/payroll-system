@@ -94,30 +94,30 @@ class ReportServiceTest extends AbstractDbTest {
     @Test
     void 只统计已锁定期间() {
         // 2026-10 生成过但没锁定
-        assertThat(reportService.monthly(ReportQuery.monthly("2026-10", null, null))).isEmpty();
-        assertThat(reportService.monthly(ReportQuery.monthly("2026-11", null, null))).isNotEmpty();
+        assertThat(reportService.monthly(ReportQuery.monthly("2026-10", null, null)).rows()).isEmpty();
+        assertThat(reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows()).isNotEmpty();
     }
 
     @Test
     void 五种数据范围各查一次报表() {
-        long totalRows = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).size();
+        long totalRows = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows().size();
         assertThat(totalRows).isEqualTo(5); // 3 个默认主体部门 + 北京 + 上海
 
         login(1, 1, "COMPANY");
-        List<MonthlyReportRow> company = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        List<MonthlyReportRow> company = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows();
         assertThat(company).hasSize(3);
         assertThat(company).allSatisfy(r -> assertThat(r.companyId()).isEqualTo(1L));
 
         login(1, 1, "DEPT_SUB");
-        List<MonthlyReportRow> subtree = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        List<MonthlyReportRow> subtree = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows();
         assertThat(subtree).extracting(MonthlyReportRow::deptId).containsExactlyInAnyOrder(1L, 10L);
 
         login(1, 1, "DEPT");
-        List<MonthlyReportRow> dept = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        List<MonthlyReportRow> dept = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows();
         assertThat(dept).extracting(MonthlyReportRow::deptId).containsExactly(1L);
 
         CurrentUser.set(new CurrentUser(1L, 1L, perms(), "SELF", emp2));
-        List<MonthlyReportRow> self = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        List<MonthlyReportRow> self = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows();
         assertThat(self).hasSize(1);
         assertThat(self.get(0).deptId()).isEqualTo(10L);
         assertThat(self.get(0).employeeCount()).isEqualTo(1);
@@ -136,7 +136,7 @@ class ReportServiceTest extends AbstractDbTest {
 
     @Test
     void 报表合计与payRecord逐分相等() {
-        List<MonthlyReportRow> rows = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        List<MonthlyReportRow> rows = reportService.monthly(ReportQuery.monthly("2026-11", null, null)).rows();
         BigDecimal reportGross = rows.stream().map(MonthlyReportRow::grossAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal reportNet = rows.stream().map(MonthlyReportRow::netAmount)
@@ -164,13 +164,14 @@ class ReportServiceTest extends AbstractDbTest {
 
     @Test
     void 年度按人汇总_employeeCount去重不等于各月相加() {
-        List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual("2026", "EMP", null, null));
+        List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual("2026", "EMP", null, null)).rows();
         assertThat(rows).hasSize(5);
 
         AnnualReportRow emp1 = rows.stream()
                 .filter(r -> "E001".equals(r.empNo())).findFirst().orElseThrow();
-        // 11、12 两期都有记录，人数仍然是 1
-        assertThat(emp1.employeeCount()).isEqualTo(1);
+        // 按人分组时"人数"没有意义：employeeCount 置 null，用 monthCount 表达月份数
+        assertThat(emp1.employeeCount()).isNull();
+        assertThat(emp1.monthCount()).isEqualTo(2);
         assertThat(emp1.groupBy()).isEqualTo("EMP");
         assertThat(emp1.year()).isEqualTo("2026");
 
@@ -191,11 +192,12 @@ class ReportServiceTest extends AbstractDbTest {
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(400);
 
-        List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual("2026", "DEPT", 1L, null));
+        List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual("2026", "DEPT", 1L, null)).rows();
         assertThat(rows).extracting(AnnualReportRow::deptId).containsExactlyInAnyOrder(1L, 10L, 20L);
         assertThat(rows).allSatisfy(r -> {
             assertThat(r.groupBy()).isEqualTo("DEPT");
             assertThat(r.employeeCount()).isEqualTo(1);
+            assertThat(r.monthCount()).isNull();
         });
 
         BigDecimal reportGross = rows.stream().map(AnnualReportRow::grossAmount)
@@ -214,11 +216,13 @@ class ReportServiceTest extends AbstractDbTest {
     void 年度SELF只返回本人且兼容EMPLOYEE写法() {
         CurrentUser.set(new CurrentUser(1L, 1L, perms(), "SELF", emp2));
         List<AnnualReportRow> rows = reportService.annual(
-                ReportQuery.annual("2026", "EMPLOYEE", null, null));
+                ReportQuery.annual("2026", "EMPLOYEE", null, null)).rows();
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).employeeId()).isEqualTo(emp2);
         assertThat(rows.get(0).groupBy()).isEqualTo("EMP");
-        assertThat(rows.get(0).employeeCount()).isEqualTo(1);
+        assertThat(rows.get(0).employeeCount()).isNull();
+        // 11、12 两期已锁定，按人汇总的月份数 = 2
+        assertThat(rows.get(0).monthCount()).isEqualTo(2);
     }
 
     @Test
@@ -235,7 +239,7 @@ class ReportServiceTest extends AbstractDbTest {
         assertThat(value).doesNotContain("8600").doesNotContain("8000");
 
         // 空结果不写审计（没看到任何数据就没有窥探痕迹）
-        assertThat(reportService.monthly(ReportQuery.monthly("2026-10", null, null))).isEmpty();
+        assertThat(reportService.monthly(ReportQuery.monthly("2026-10", null, null)).rows()).isEmpty();
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pay_audit_log WHERE biz_type = 'REPORT'", Integer.class)).isEqualTo(1);
 
@@ -245,6 +249,21 @@ class ReportServiceTest extends AbstractDbTest {
         assertThat(afterAnnual).hasSize(2);
         assertThat((String) afterAnnual.get(1).get("new_value"))
                 .contains("year=2026").contains("groupBy=EMP");
+    }
+
+    @Test
+    void 报表列出未锁定但已有明细的期间() {
+        // 2026-10 已生成但未锁定；11/12 已锁定
+        var monthly = reportService.monthly(ReportQuery.monthly("2026-10", null, null));
+        assertThat(monthly.rows()).isEmpty();
+        assertThat(monthly.excludedPeriods()).containsExactly("2026-10");
+
+        var annual = reportService.annual(ReportQuery.annual("2026", "EMP", null, null));
+        assertThat(annual.excludedPeriods()).contains("2026-10")
+                .doesNotContain("2026-11", "2026-12");
+
+        var lockedMonth = reportService.monthly(ReportQuery.monthly("2026-11", null, null));
+        assertThat(lockedMonth.excludedPeriods()).isEmpty();
     }
 
     @Test

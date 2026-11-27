@@ -10,6 +10,8 @@ public record RunProgressDTO(
         int success,
         int failed,
         List<RunErrorDTO> errors,
-        Map<String, String> skipped
+        Map<String, String> skipped,
+        /** 非致命警告（如"节假日未配置但存在不足月折算"），不影响批次状态。 */
+        List<String> warnings
 ) {
 }

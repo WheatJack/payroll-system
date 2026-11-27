@@ -239,6 +239,19 @@ class RecordServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 锁定与解锁同步记录状态() {
+        periodService.lock(periodId, OTHER_USER);
+        assertThat(recordStatus(recordId)).isEqualTo("CONFIRMED");
+
+        periodService.unlock(periodId, OTHER_USER, "复核后释放");
+        assertThat(recordStatus(recordId)).isEqualTo("DRAFT");
+    }
+
+    private String recordStatus(Long id) {
+        return jdbc.queryForObject("SELECT record_status FROM pay_record WHERE id = ?", String.class, id);
+    }
+
+    @Test
     void 停用科目服务端拒绝写入() {
         jdbc.update("UPDATE pay_item SET status = 0 WHERE item_code = 'PERF_BONUS'");
 

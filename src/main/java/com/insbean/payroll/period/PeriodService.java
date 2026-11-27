@@ -216,6 +216,8 @@ public class PeriodService {
         period.setLockedBy(userId);
         period.setLockedAt(LocalDateTime.now());
         periodMapper.updateById(period);
+        // 锁定即确认：记录状态同步为 CONFIRMED，报表/下游据此区分"已确认的工资"
+        syncRecordStatus(periodId, "DRAFT", "CONFIRMED");
         // 锁定是高危动作，必须留痕（谁在什么时候锁了哪一期）
         auditService.record("PERIOD", periodId, "LOCK", "status", status.name(), PeriodStatus.LOCKED.name());
         return toDto(period);
@@ -241,10 +243,19 @@ public class PeriodService {
         period.setLockedBy(null);
         period.setLockedAt(null);
         periodMapper.updateById(period);
+        // 解锁回退为编制中，记录状态随之回到 DRAFT
+        syncRecordStatus(periodId, "CONFIRMED", "DRAFT");
         // 解锁是最高危的动作（重开已锁定期间），原因必须进审计
         auditService.record("PERIOD", periodId, "UNLOCK", "unlock_reason",
                 PeriodStatus.LOCKED.name(), reason.trim());
         return toDto(period);
+    }
+
+    private void syncRecordStatus(Long periodId, String from, String to) {
+        recordMapper.update(null, Wrappers.<PayRecordEntity>lambdaUpdate()
+                .set(PayRecordEntity::getRecordStatus, to)
+                .eq(PayRecordEntity::getPeriodId, periodId)
+                .eq(PayRecordEntity::getRecordStatus, from));
     }
 
     // ------------------------------------------------------------------ 任务租约

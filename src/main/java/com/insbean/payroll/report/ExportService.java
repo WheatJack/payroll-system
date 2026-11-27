@@ -119,7 +119,7 @@ public class ExportService {
             case "MONTHLY" -> {
                 requirePeriodYm(params);
                 List<MonthlyReportRow> rows = reportService.monthly(
-                        ReportQuery.monthly(params.periodYm(), params.companyId(), params.deptId()));
+                        ReportQuery.monthly(params.periodYm(), params.companyId(), params.deptId())).rows();
                 dataRows = rows.size();
                 sheets = List.of(monthlySheet(rows));
                 filename = "monthly-" + params.periodYm() + "-" + stamp + ".xlsx";
@@ -128,7 +128,7 @@ public class ExportService {
             case "ANNUAL" -> {
                 requireYearAndGroupBy(params);
                 List<AnnualReportRow> rows = reportService.annual(ReportQuery.annual(
-                        params.year(), params.groupBy(), params.companyId(), params.deptId()));
+                        params.year(), params.groupBy(), params.companyId(), params.deptId())).rows();
                 Long sheetCompanyId = params.companyId() != null
                         ? params.companyId()
                         : (DataScopeEnforcer.ALL.equals(me.dataScope()) ? null : me.companyId());
@@ -209,11 +209,12 @@ public class ExportService {
         if (byEmployee) {
             columns.add(ExcelWriter.Column.text("工号"));
             columns.add(ExcelWriter.Column.text("姓名"));
+            columns.add(ExcelWriter.Column.integer("月份数"));
         } else {
             columns.add(ExcelWriter.Column.text("法人主体"));
             columns.add(ExcelWriter.Column.text("部门"));
+            columns.add(ExcelWriter.Column.integer("人数"));
         }
-        columns.add(ExcelWriter.Column.integer("人数"));
         columns.add(ExcelWriter.Column.money("应发合计"));
         columns.add(ExcelWriter.Column.money("扣款合计"));
         columns.add(ExcelWriter.Column.money("实发合计"));
@@ -226,11 +227,12 @@ public class ExportService {
             if (byEmployee) {
                 row.add(r.empNo());
                 row.add(r.empName());
+                row.add(r.monthCount());
             } else {
                 row.add(companyName(sheetCompanyId));
                 row.add(r.deptName() == null ? String.valueOf(r.deptId()) : r.deptName());
+                row.add(r.employeeCount());
             }
-            row.add(r.employeeCount());
             row.add(r.grossAmount());
             row.add(r.deductionAmount());
             row.add(r.netAmount());

@@ -334,6 +334,10 @@ class SystemOpsFlowIT extends AbstractDbTest {
     @Test
     void 报表查询与导出走真实HTTP() throws Exception {
         long periodId = lockedPayroll();
+        // 另建一个有明细但未锁定的期间，报表必须显式列出它而不是静默漏掉
+        long editing = periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(editing, 1L);
 
         String reviewer = login("hr02");
         MvcResult monthly = mvc.perform(get("/api/v1/reports/monthly")
@@ -343,8 +347,19 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(monthly.getResponse().getStatus()).isEqualTo(200);
         JsonNode monthlyBody = objectMapper.readTree(body(monthly));
         assertThat(monthlyBody.path("code").asInt()).isZero();
-        assertThat(monthlyBody.path("data").size()).isEqualTo(1);
-        assertThat(monthlyBody.path("data").get(0).path("grossAmount").asText()).isEqualTo("8600.00");
+        assertThat(monthlyBody.path("data").path("rows").size()).isEqualTo(1);
+        assertThat(monthlyBody.path("data").path("rows").get(0).path("grossAmount").asText())
+                .isEqualTo("8600.00");
+        assertThat(monthlyBody.path("data").path("excludedPeriods").size()).isZero();
+
+        MvcResult editingMonth = mvc.perform(get("/api/v1/reports/monthly")
+                        .param("periodYm", "2026-12")
+                        .header("Authorization", "Bearer " + reviewer))
+                .andReturn();
+        JsonNode editingBody = objectMapper.readTree(body(editingMonth));
+        assertThat(editingBody.path("data").path("rows").size()).isZero();
+        assertThat(editingBody.path("data").path("excludedPeriods").get(0).asText())
+                .isEqualTo("2026-12");
 
         // 年度 + 按部门但缺 companyId：ALL 账号会看到多主体 → 400
         MvcResult annual = mvc.perform(get("/api/v1/reports/annual")

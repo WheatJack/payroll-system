@@ -50,7 +50,19 @@ public class ReportService {
         this.auditService = auditService;
     }
 
-    public List<MonthlyReportRow> monthly(ReportQuery query) {
+    /**
+     * 报表响应：行 + 被排除的期间。
+     *
+     * <p>只统计 LOCKED/ARCHIVED 期间是冻结口径；但"某月有明细却未锁定"必须显式返回，
+     * 否则年度报表静默少几千万，用户会以为系统算错。
+     */
+    public record MonthlyReportResult(List<MonthlyReportRow> rows, List<String> excludedPeriods) {
+    }
+
+    public record AnnualReportResult(List<AnnualReportRow> rows, List<String> excludedPeriods) {
+    }
+
+    public MonthlyReportResult monthly(ReportQuery query) {
         String periodYm = query == null ? null : query.periodYm();
         if (periodYm == null || !periodYm.matches(PERIOD_YM_PATTERN)) {
             throw new BizException(400, "periodYm 格式必须为 YYYY-MM：" + periodYm);
@@ -86,10 +98,10 @@ public class ReportService {
                         money(row.get("net_amount"))))
                 .toList();
         auditView("MONTHLY", "periodYm=" + periodYm, companyId, query.deptId(), rows.size());
-        return rows;
+        return new MonthlyReportResult(rows, excludedPeriods(periodYm, periodYm, companyId));
     }
 
-    public List<AnnualReportRow> annual(ReportQuery query) {
+    public AnnualReportResult annual(ReportQuery query) {
         String year = query == null ? null : query.year();
         if (year == null || !year.matches(YEAR_PATTERN)) {
             throw new BizException(400, "year 格式必须为 YYYY：" + year);
@@ -127,13 +139,15 @@ public class ReportService {
                             asLong(row.get("employee_id")),
                             (String) row.get("emp_no"),
                             (String) row.get("emp_name"),
-                            asInt(row.get("employee_count")),
+                            // 按人分组时"人数"恒为 1，没有信息量：置 null，用 monthCount 表达月数
+                            null,
+                            asInt(row.get("month_count")),
                             money(row.get("gross_amount")),
                             money(row.get("deduction_amount")),
                             money(row.get("net_amount"))))
                     .toList();
             auditView("ANNUAL", "year=" + year + ";groupBy=EMP", companyId, query.deptId(), rows.size());
-            return rows;
+            return new AnnualReportResult(rows, excludedPeriods(year + "-01", year + "-12", companyId));
         }
 
         wrapper.groupBy(PayRecordEntity::getCompanyId, PayRecordEntity::getDeptId)
@@ -146,12 +160,22 @@ public class ReportService {
                         (String) row.get("dept_name"),
                         null, null, null,
                         asInt(row.get("employee_count")),
+                        null,
                         money(row.get("gross_amount")),
                         money(row.get("deduction_amount")),
                         money(row.get("net_amount"))))
                 .toList();
         auditView("ANNUAL", "year=" + year + ";groupBy=DEPT", companyId, query.deptId(), rows.size());
-        return rows;
+        return new AnnualReportResult(rows, excludedPeriods(year + "-01", year + "-12", companyId));
+    }
+
+    /** 该范围内"有明细但未锁定"的月份；非集团账号只统计自己主体。 */
+    private List<String> excludedPeriods(String from, String to, Long companyId) {
+        CurrentUser current = requireUser();
+        Long scopeCompany = DataScopeEnforcer.ALL.equals(current.dataScope())
+                ? companyId
+                : current.companyId();
+        return reportMapper.excludedPeriods(from, to, scopeCompany);
     }
 
     /**

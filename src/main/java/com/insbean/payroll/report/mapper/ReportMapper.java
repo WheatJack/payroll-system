@@ -44,6 +44,25 @@ public interface ReportMapper {
             """)
     List<Map<String, Object>> annualByDept(@Param(Constants.WRAPPER) Wrapper<PayRecordEntity> wrapper);
 
+    /**
+     * 期间内"有明细但未锁定"的月份：报表只统计已锁定期间，这些月份会被排除。
+     * 必须显式返回给前端提示，否则用户会把"少了 3500 万"当成系统算错。
+     */
+    @Select("""
+            <script>
+            SELECT DISTINCT p.period_ym
+              FROM pay_period p
+              JOIN pay_record r ON r.period_id = p.id AND r.deleted = 0
+             WHERE p.status IN ('DRAFT', 'EDITING')
+               AND p.period_ym &gt;= #{from} AND p.period_ym &lt;= #{to}
+               <if test="companyId != null">AND p.company_id = #{companyId}</if>
+             ORDER BY p.period_ym
+            </script>
+            """)
+    List<String> excludedPeriods(@Param("from") String from,
+                                 @Param("to") String to,
+                                 @Param("companyId") Long companyId);
+
     /** 按人汇总年度：一个人跨月跨主体都归到同一行（pay_record 集团级唯一保证同月不重复）。 */
     @Select("""
             SELECT employee_id,

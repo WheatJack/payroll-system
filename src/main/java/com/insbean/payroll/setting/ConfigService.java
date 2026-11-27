@@ -164,7 +164,12 @@ public class ConfigService {
     }
 
     private static ConfigItemDTO toDto(ConfigEntity e) {
+        boolean valueEmpty = e.getConfigValue() == null || e.getConfigValue().isBlank();
+        // 节假日为空不是"没配置完"，而是直接导致不足月折算多算钱：让前端能显示警示
+        String warning = CALENDAR_HOLIDAYS.equals(e.getConfigKey()) && valueEmpty
+                ? "法定节假日未配置：不足月折算只排除周末，折算天数可能偏多"
+                : null;
         return new ConfigItemDTO(e.getConfigKey(), e.getConfigValue(), e.getValueType(),
-                e.getDescription(), e.getEditable() != null && e.getEditable() == 1);
+                e.getDescription(), e.getEditable() != null && e.getEditable() == 1, warning);
     }
 }

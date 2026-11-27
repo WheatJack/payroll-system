@@ -482,6 +482,23 @@ class GenerateServiceTest extends AbstractDbTest {
                 Integer.class, periodId)).isZero();
     }
 
+    @Test
+    void 节假日未配置且存在不足月折算时给出警告() {
+        Long e300 = createEmployee("E300", "110101199001015555", TestDb.COMPANY_DEFAULT,
+                TestDb.DEPT_DEFAULT, LocalDate.of(2026, 11, 16));
+        compProfileService.save(new CompProfileSaveReq(null, e300, LocalDate.of(2026, 11, 16),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        Long run1 = generateService.startGenerate(periodId, OPERATOR);
+        assertThat(generateService.progress(run1).warnings())
+                .anySatisfy(w -> assertThat(w).contains("节假日"));
+
+        // 配上节假日（哪怕只配一天）后警告消失：口径从"没配"变成"已配"
+        configService.update(ConfigService.CALENDAR_HOLIDAYS, "2026-11-20");
+        Long run2 = generateService.startGenerate(periodId, OPERATOR);
+        assertThat(generateService.progress(run2).warnings()).isEmpty();
+    }
+
     private String itemSource(Long recordId, String itemCode) {
         return jdbc.queryForObject("""
                 SELECT source FROM pay_record_item WHERE record_id = ? AND item_code = ?

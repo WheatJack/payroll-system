@@ -212,7 +212,7 @@ public class GenerateService {
         }
         errors.addAll(progress.errors);
         return new RunProgressDTO(run.getStatus(), progress.total, progress.success,
-                progress.failed, errors, progress.skipped);
+                progress.failed, errors, progress.skipped, progress.warnings);
     }
 
     // ------------------------------------------------------------------ 生成主流程
@@ -250,6 +250,12 @@ public class GenerateService {
             transactionTemplate.executeWithoutResult(status ->
                     processBatch(period, periodStart, periodEnd, itemDefs, sortNoByCode, batch,
                             operatorId, progress, divisor, seniority, days));
+        }
+
+        // 生成结束后才能统计到实际折算人数：节假日未配置是有钱风险的提示，必须让人看见
+        if (progress.prorated > 0 && holidays.isEmpty()) {
+            progress.warnings.add("本期有 " + progress.prorated
+                    + " 人按不足月折算，但法定节假日未配置，折算天数可能偏多");
         }
     }
 
@@ -301,12 +307,16 @@ public class GenerateService {
                     ? Map.of()
                     : manualItems.getOrDefault(existingRecord.getId(), Map.of());
 
+            Integer payableDays = payableDays(emp, periodStart, periodEnd, holidays);
+            if (payableDays != null) {
+                progress.prorated++;
+            }
             PayrollResult result;
             try {
                 result = calculator.calculate(new EmployeePayContext(
                         emp.getId(), emp.getEmpNo(), emp.getName(), profile.baseSalary(),
                         emp.getHireDate(), emp.getLeaveDate(), periodStart, periodEnd,
-                        payableDays(emp, periodStart, periodEnd, holidays),
+                        payableDays,
                         itemDefs, fixedItems, variableItems,
                         payableDaysDivisor, seniorityPayPerYear));
             } catch (RuntimeException e) {
@@ -520,7 +530,8 @@ public class GenerateService {
             ProgressPayload payload = new ProgressPayload(
                     progress.total, progress.success, progress.failed, progress.failure,
                     truncate(progress.errors, MAX_ERROR_ENTRIES),
-                    truncate(progress.skipped, MAX_SKIPPED_ENTRIES));
+                    truncate(progress.skipped, MAX_SKIPPED_ENTRIES),
+                    progress.prorated, progress.warnings);
             String json = objectMapper.writeValueAsString(payload);
             if (json.length() <= MAX_ERROR_MSG_LENGTH) {
                 return json;
@@ -529,7 +540,8 @@ public class GenerateService {
                     progress.total, progress.success, progress.failed, progress.failure,
                     List.of(), Map.of("_truncated",
                     "明细过多已省略：errors=" + progress.errors.size()
-                            + "，skipped=" + progress.skipped.size()));
+                            + "，skipped=" + progress.skipped.size()),
+                    progress.prorated, progress.warnings);
             return objectMapper.writeValueAsString(summary);
         } catch (Exception e) {
             log.warn("进度序列化失败", e);
@@ -564,6 +576,8 @@ public class GenerateService {
             progress.failure = payload.failure();
             progress.errors = payload.errors() == null ? new ArrayList<>() : new ArrayList<>(payload.errors());
             progress.skipped = payload.skipped() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(payload.skipped());
+            progress.prorated = payload.prorated();
+            progress.warnings = payload.warnings() == null ? new ArrayList<>() : new ArrayList<>(payload.warnings());
         } catch (Exception e) {
             log.warn("进度反序列化失败，按空进度处理", e);
         }
@@ -571,7 +585,8 @@ public class GenerateService {
     }
 
     private record ProgressPayload(int total, int success, int failed, String failure,
-                                   List<RunErrorDTO> errors, Map<String, String> skipped) {
+                                   List<RunErrorDTO> errors, Map<String, String> skipped,
+                                   int prorated, List<String> warnings) {
     }
 
     /** 生成过程中的可变进度。只在单线程内使用。 */
@@ -583,5 +598,8 @@ public class GenerateService {
         String failure;
         List<RunErrorDTO> errors = new ArrayList<>();
         Map<String, String> skipped = new LinkedHashMap<>();
+        /** 本期发生不足月折算的人数（用于节假日未配置的警告）。 */
+        int prorated;
+        List<String> warnings = new ArrayList<>();
     }
 }

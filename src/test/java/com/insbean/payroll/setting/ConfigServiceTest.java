@@ -37,6 +37,9 @@ class ConfigServiceTest extends AbstractDbTest {
                     assertThat(c.valueType()).isEqualTo("DECIMAL");
                     assertThat(c.editable()).isTrue();
                 });
+        assertThat(configs).filteredOn(c -> c.key().equals(ConfigService.CALENDAR_HOLIDAYS))
+                .singleElement()
+                .satisfies(c -> assertThat(c.warning()).contains("节假日未配置"));
     }
 
     @Test
@@ -58,6 +61,9 @@ class ConfigServiceTest extends AbstractDbTest {
     @Test
     void 节假日列表可解析且格式非法返回400() {
         configService.update(ConfigService.CALENDAR_HOLIDAYS, "2026-11-02,2026-11-03");
+        assertThat(configService.list()).filteredOn(c -> c.key().equals(ConfigService.CALENDAR_HOLIDAYS))
+                .singleElement()
+                .satisfies(c -> assertThat(c.warning()).isNull());
         assertThat(configService.getDateList(ConfigService.CALENDAR_HOLIDAYS))
                 .containsExactlyInAnyOrder(LocalDate.of(2026, 11, 2), LocalDate.of(2026, 11, 3));
 

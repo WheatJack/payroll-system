@@ -5,8 +5,10 @@ import java.math.BigDecimal;
 /**
  * 契约 components.schemas.AnnualReportRow。
  *
- * <p>按人分组时 employeeId/empNo/empName 有值；按部门分组时 deptId/deptName 有值。
- * employeeCount 是组内去重人数，不是各月相加。
+ * <p>按人分组时 employeeId/empNo/empName 有值，且 {@code employeeCount} 为 null、
+ * {@code monthCount} 为该员工有工资的月份数（按人分组时"人数"恒为 1，没有意义）；
+ * 按部门分组时 deptId/deptName 有值，{@code employeeCount} 为组内去重人数，
+ * {@code monthCount} 为 null。
  */
 public record AnnualReportRow(
         String year,
@@ -17,6 +19,7 @@ public record AnnualReportRow(
         String empNo,
         String empName,
         Integer employeeCount,
+        Integer monthCount,
         BigDecimal grossAmount,
         BigDecimal deductionAmount,
         BigDecimal netAmount
