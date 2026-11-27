@@ -452,12 +452,22 @@ void 无薪酬档案的员工被跳过并记录原因() {
 
 ```java
 @Test
-void 保存后合计等于明细加总() {
-    ChangesetReq req = oneChange("101", 0, Map.of("PERF_BONUS", "2000.00"));
-    service.applyChangeset(periodId, req);
-    GridRow row = service.grid(periodId).rows().get(0);
-    BigDecimal sum = row.items().values().stream().map(BigDecimal::new).reduce(ZERO, BigDecimal::add);
-    assertThat(new BigDecimal(row.grossAmount())).isEqualByComparingTo(sum);
+void 保存后应发与扣款分别等于对应方向的明细加总() {
+    service.applyChangeset(periodId, oneChange("101", 0, Map.of("PERF_BONUS", "2000.00")));
+    service.applyChangeset(periodId, oneChange("101", 1, Map.of("ATT_DEDUCT", "300.00")));
+
+    GridResponse grid = service.grid(periodId);
+    GridRow row = grid.rows().get(0);
+    Map<String, Integer> dir = grid.columns().stream()
+            .collect(Collectors.toMap(GridColumn::itemCode, GridColumn::direction));
+
+    // 明细恒非负，必须按 direction 分别汇总；直接对全部 items 求和会把扣款项算进应发
+    BigDecimal gross = sumByDirection(row, dir, 1);
+    BigDecimal deduction = sumByDirection(row, dir, 2);
+
+    assertThat(new BigDecimal(row.grossAmount())).isEqualByComparingTo(gross);
+    assertThat(new BigDecimal(row.deductionAmount())).isEqualByComparingTo(deduction);
+    assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo(gross.subtract(deduction));
 }
 
 @Test
@@ -480,6 +490,7 @@ void 锁定期间拒绝保存() {
 
 - `grid`：一次查询记录 + 一次查询全部明细，在内存组装 `Map<itemCode, String>`，避免 N+1
 - `applyChangeset`：先 `assertWritable`；逐条按 `(recordId, version)` 乐观锁更新；任一冲突则整体失败并返回全部冲突项；成功后重算该条合计并 `version+1`
+- **版本冲突必须抛 `VersionConflictException`**，由 `GlobalExceptionHandler` 映射为 **HTTP 409**，body 形如 `{code:409, msg:"数据已被他人修改", data:{conflicts:[{recordId:"101"}]}}`。前端据此高亮冲突行——不能只返回一个空 `Result<Void>`
 
 - [ ] **Step 4: 运行确认通过**
 - [ ] **Step 5: 提交** `feat(backend): payroll grid and changeset save`
@@ -782,3 +793,227 @@ test('未保存的编辑在切换筛选后仍然存在', () => {
 | M1b 前端链路 | mock 下可走完编制流程 | Task 10–17 |
 | M1 联调 | Task 18 五条全部通过 | 全部 |
 | M2 | 导入管道、报表与导出 | 另行规划 |
+
+---
+
+# 第二阶段：需求 5 + 导入 + 系统管理（M1.5）
+
+> 用户确认「三块一起补」。M1 已交付：人员、薪酬档案、期间、生成、编制台、重复检测。
+> 本阶段补齐需求 3 的导入、需求 5 的查询与导出，以及系统自带的管理功能。
+
+## 第二阶段约束（在 Global Constraints 之上追加）
+
+- 汇总只统计 `LOCKED` 与 `ARCHIVED` 期间；`EDITING` 及之前不计入
+- 查询与导出都必须按数据范围过滤：`SELF` 只能看本人，`DEPT`/`DEPT_SUB` 看本部门及下级，`ALL` 看全部
+- 导出必须校验 `payroll:export` 权限，写 `pay_audit_log`（`action=EXPORT`），记录条件与行数
+- 导入的模板列由 `pay_item` 动态生成，不得写死
+- 系统管理新增权限点：`sys:user:*`、`sys:role:*`、`sys:dept:*`、`sys:company:*`
+- 金额导出到 Excel 时写**文本格式**，避免 Excel 把 18 位数字转科学计数法
+
+## Task 18: 扩展接口契约
+
+**Files:**
+- Modify: `docs/api/openapi.yaml`
+- Create: `docs/api/examples/monthly-report.json`
+
+**Interfaces:**
+- Consumes: 现有 `/reports/monthly`、`/reports/annual`、`/import/*` 定义
+- Produces: 新增 `POST /reports/export`、系统管理端点；所有新端点去掉 `x-milestone: M2`
+
+- [ ] **Step 1: 新增 `POST /reports/export`**
+  body `{reportType:"MONTHLY"|"ANNUAL", params:{...}, format:"XLSX"}` → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 二进制流，`Content-Disposition: attachment`
+- [ ] **Step 2: 新增系统管理端点**（均为 M1.5）
+  `GET/POST /users`、`PUT /users/{id}`、`POST /users/{id}/reset-password`、
+  `GET /roles`、`POST /roles`、`PUT /roles/{id}`、`PUT /roles/{id}/grants`、
+  `POST /depts`、`PUT /depts/{id}`、`GET/POST /companies`、`PUT /companies/{id}`
+- [ ] **Step 3: 把 `/reports/*` 与 `/import/*` 的 `x-milestone` 从 M2 改为 M1.5**
+- [ ] **Step 4: 验证** `npx --yes @redocly/cli@1 lint docs/api/openapi.yaml` 通过，`openapi-typescript` 能生成
+- [ ] **Step 5: 提交** `docs: extend contract for reports, import and system admin`
+
+## Task 19: 月度/年度汇总查询（后端）
+
+**Files:**
+- Create: `report/{ReportController,ReportService}.java`、`report/mapper/ReportMapper.java`
+- Create: `report/dto/{MonthlyReportRow,AnnualReportRow,ReportQuery}.java`
+- Test: `src/test/java/com/insbean/payroll/report/ReportServiceTest.java`
+
+**Interfaces:**
+- Consumes: `pay_summary_monthly`、`pay_record`、`DataScope` 当前用户上下文
+- Produces: `List<MonthlyReportRow> monthly(ReportQuery)`、`List<AnnualReportRow> annual(ReportQuery)`
+
+- [ ] **Step 1: 写失败测试**
+
+```java
+@Test
+void 只统计已锁定期间() {
+    // 2026-11 锁定、2026-12 仍在编辑
+    assertThat(service.monthly(q("2026-12")).rows()).isEmpty();
+}
+
+@Test
+void SELF范围只能看到本人() {
+    assertThat(service.annual(q("2026").selfUser(empId)).rows()).hasSize(1);
+}
+
+@Test
+void 年度按部门汇总的合计等于各月相加() { ... }
+```
+
+- [ ] **Step 2: 运行确认失败**
+- [ ] **Step 3: 实现**：月份过滤 `IN ('LOCKED','ARCHIVED')`；数据范围用 `data_scope` + 部门 `ancestors` 过滤
+- [ ] **Step 4: 运行确认通过**
+- [ ] **Step 5: 提交** `feat(backend): monthly and annual payroll reports`
+
+## Task 20: 导出（后端）
+
+**Files:**
+- Create: `report/{ExportService,ExcelWriter}.java`
+- Create: `audit/{AuditService,AuditMapper}.java`
+- Test: `src/test/java/com/insbean/payroll/report/ExportServiceTest.java`
+
+**Interfaces:**
+- Consumes: Task 19 的查询
+- Produces: `byte[] export(ReportQuery)`；写 `pay_audit_log`
+
+- [ ] **Step 1: 写失败测试**
+
+```java
+@Test
+void 无导出权限时抛403() {
+    assertThatThrownBy(() -> service.export(q, userWithout("payroll:export")))
+            .isInstanceOf(BizException.class);
+}
+
+@Test
+void 导出写审计且金额为文本格式() {
+    byte[] xlsx = service.export(q, clerk);
+    assertThat(auditMapper.lastAction()).isEqualTo("EXPORT");
+    assertThat(new String(xlsx)).doesNotContain("8.0E3"); // 不能被转成科学计数法
+}
+```
+
+- [ ] **Step 2: 运行确认失败**
+- [ ] **Step 3: 实现**：EasyExcel 写出；金额列设 `@ExcelProperty` + 文本格式；文件名带期间与时间戳
+- [ ] **Step 4: 运行确认通过**
+- [ ] **Step 5: 提交** `feat(backend): report export with audit`
+
+## Task 21: 导入管道（后端）
+
+**Files:**
+- Create: `importjob/{ImportController,ImportService,ImportValidator}.java`、`importjob/mapper/{ImportBatchMapper,ImportErrorMapper}.java`
+- Create: `importjob/dto/{ImportPreview,ImportErrorRow}.java`
+- Test: `src/test/java/com/insbean/payroll/importjob/ImportServiceTest.java`
+
+**Interfaces:**
+- Consumes: `pay_item`（动态列）、`pay_record`/`pay_record_item`
+- Produces: `Long validate(MultipartFile)` → batchId（不落库）；`void commit(Long batchId)`；`byte[] errorReport(Long batchId)`
+
+- [ ] **Step 1: 写失败测试**
+
+```java
+@Test
+void 预校验不落库() {
+    long batchId = service.validate(fileWith(3, "绩效"));
+    assertThat(recordItemMapper.count()).isZero();
+    assertThat(service.batch(batchId).successRows()).isEqualTo(3);
+}
+
+@Test
+void 同一文件重复提交被拒绝() {
+    service.validate(f);
+    assertThatThrownBy(() -> service.validate(f)).isInstanceOf(BizException.class);
+}
+
+@Test
+void 文件内重复工号被拒并列出冲突行() {
+    ImportPreview p = service.validate(fileWithDup());
+    assertThat(p.errors()).anyMatch(e -> e.msg().contains("第 2 行"));
+}
+```
+
+- [ ] **Step 2: 运行确认失败**
+- [ ] **Step 3: 实现**：EasyExcel 流式读；按 `(batch_no, row_no)` 幂等；`UPSERT/APPEND/INSERT_ONLY` 三种模式
+- [ ] **Step 4: 运行确认通过**
+- [ ] **Step 5: 提交** `feat(backend): payroll change data import pipeline`
+
+## Task 22: 系统管理接口（后端）
+
+**Files:**
+- Create: `security/{UserAdminController,RoleAdminController,UserAdminService,RoleAdminService}.java`
+- Create: `org/{DeptAdminController,CompanyAdminController}.java`
+- Test: `src/test/java/com/insbean/payroll/security/UserAdminServiceTest.java`
+
+**Interfaces:**
+- Produces: 用户 CRUD + 重置密码、角色 CRUD + 授权、部门 CRUD、主体 CRUD
+- Produces: 新增权限点 `sys:user:*` 等，并写入 `sys_role_grant` 种子
+
+- [ ] **Step 1: 写失败测试**
+
+```java
+@Test
+void 无sys权限点不能管理用户() {
+    assertThatThrownBy(() -> service.create(req, clerkUser))
+            .isInstanceOf(BizException.class);
+}
+
+@Test
+void 重置密码后旧密码失效新密码可用() { ... }
+
+@Test
+void 不能停用自己账号() { ... }
+```
+
+- [ ] **Step 2: 运行确认失败** → **Step 3: 实现** → **Step 4: 通过**
+- [ ] **Step 5: 提交** `feat(backend): system administration endpoints`
+
+## Task 23: 报表页（前端）
+
+**Files:**
+- Create: `frontend/src/views/report/{MonthlyReportView,AnnualReportView}.vue`
+- Create: `frontend/src/api/report.ts`
+- Test: `frontend/src/utils/__tests__/report.spec.ts`
+
+- [ ] **Step 1: 手工验收清单**
+  - 月度按部门汇总，年度可切「按人 / 按部门」
+  - 金额全部走 `money` 工具，合计行按列累加
+  - 无 `payroll:export` 权限时导出按钮不渲染
+  - 导出触发浏览器下载，文件名含期间
+  - `SELF` 用户进入报表页只看到自己一行
+
+- [ ] **Step 2: 实现并逐条核对** → **Step 3: 提交** `feat(frontend): monthly and annual reports`
+
+## Task 24: 导入向导（前端）
+
+**Files:**
+- Create: `frontend/src/views/period/ImportWizard.vue`
+- Create: `frontend/src/api/import.ts`
+
+- [ ] **Step 1: 手工验收清单**
+  - 下载模板（列头由接口返回）
+  - 上传 → 预校验 → 显示「成功 N / 失败 M」
+  - 错误报告可下载
+  - 部分失败时**禁止提交**（产品红线）
+  - 同一文件重复上传被拒并给出提示
+
+- [ ] **Step 2: 实现并逐条核对** → **Step 3: 提交** `feat(frontend): import wizard`
+
+## Task 25: 系统管理页（前端）
+
+**Files:**
+- Create: `frontend/src/views/system/{UserListView,RoleListView,DeptTreeView,CompanyListView}.vue`
+- Create: `frontend/src/api/system.ts`
+
+- [ ] **Step 1: 手工验收清单**
+  - 用户：新增/编辑/停用/重置密码
+  - 角色：勾选权限点、设置数据范围
+  - 部门：树形增删改
+  - 无 `sys:*` 权限时菜单不显示
+
+- [ ] **Step 2: 实现并逐条核对** → **Step 3: 提交** `feat(frontend): system administration pages`
+
+## Task 26: 全量联调验收
+
+- [ ] 关闭 mock，前后端同起
+- [ ] 走通：建人员 → 配薪 → 建期间 → 生成 → 导入变动数据 → 编制台改数 → 锁定 → 月度报表 → 导出
+- [ ] 逐条验证 M1 的五条 Review Focus，加上：SELF 用户看不到他人、导出文件金额未被转成科学计数法
+
