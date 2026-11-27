@@ -224,20 +224,15 @@ const filterActive = computed(
 )
 
 function footerMethod({ columns: footerColumns }: { columns: Array<{ field?: string }> }): string[][] {
+  // 只放逐列合计。应发/扣款/实发是跨列的方向汇总，塞进页脚会被挤进窄列折行，
+  // 改为在表格下方单独一条横栏展示（见模板中的 .grid-summary）。
   const perColumnRow = footerColumns.map((column, index) => {
     if (index === 0) return filterActive.value ? '合计（筛选后）' : '合计'
     const field = column.field
     if (field && totals.value.perColumn[field] !== undefined) return format(totals.value.perColumn[field])
     return ''
   })
-  const summaryRow = footerColumns.map(() => '')
-  if (summaryRow.length >= 6) {
-    summaryRow[0] = '方向汇总'
-    summaryRow[1] = `应发 ${format(totals.value.gross)}`
-    summaryRow[2] = `扣款 ${format(totals.value.deduction)}`
-    summaryRow[3] = `实发 ${format(totals.value.net)}`
-  }
-  return [perColumnRow, summaryRow]
+  return [perColumnRow]
 }
 
 async function refreshTotals() {
@@ -506,7 +501,7 @@ onBeforeUnmount(() => {
       <vxe-table
         ref="tableRef"
         :data="store.visibleRows"
-        height="calc(100vh - 280px)"
+        height="auto"
         border
         stripe
         show-footer
@@ -570,10 +565,47 @@ onBeforeUnmount(() => {
         </template>
       </vxe-table>
     </div>
+
+    <div class="grid-summary">
+      <span class="summary-item">应发合计 <b>{{ format(totals.gross) }}</b></span>
+      <span class="summary-item">扣款合计 <b>{{ format(totals.deduction) }}</b></span>
+      <span class="summary-item summary-net">实发合计 <b>{{ format(totals.net) }}</b></span>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* 编制台要占满可用高度：窗口越矮，表格越容易被压成"一行都显示不全"。
+   用 flex 让 .grid-wrap 拿到确定高度，vxe-table 的 height="auto" 才有参照。 */
+.page-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 方向汇总放在表格外的横栏：页脚列宽只有 80–140px，长文本放进去必然折行 */
+.grid-summary {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 12px 2px;
+  font-size: 14px;
+  color: #303133;
+}
+.grid-summary .summary-item b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  margin-left: 4px;
+}
+.grid-summary .summary-net b {
+  color: #c45656;
+  font-size: 16px;
+}
 .period-ym {
   font-weight: 600;
   font-size: 15px;
