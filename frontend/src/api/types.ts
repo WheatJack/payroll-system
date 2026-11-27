@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * 人员详情
-         * @description 证件号/手机号按权限返回掩码，完整值需 `payroll:sensitive:view` 且二次确认。
+         * @description 证件号/手机号只返回掩码，不提供明文出口。
          */
         get: operations["getEmployee"];
         /**
@@ -430,6 +430,8 @@ export interface paths {
          *     `pay_import_error` 与原始文件，保证刷新后可回捞 batchId 与错误明细、
          *     也可按批次重放。提交时按批次重放并**重新校验**。
          *     返回批次号、成功/失败行数与错误明细。
+         *     同一 `(periodId, bizType, fileHash)` 已有批次时拒绝重复上传（409），
+         *     由 `UNIQUE(period_id, biz_type, file_hash)` 兜底并发竞态。
          */
         post: operations["validateImport"];
         delete?: never;
@@ -658,8 +660,9 @@ export interface paths {
         /**
          * 重置密码
          * @description 需要 `sys:user:edit`（高危操作）。重置后旧密码立即失效；
-         *     该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上由后端
-         *     新增 `sys_user.pwd_changed_at` 列，与 token 签发时间比对后判定失效。
+         *     该用户下次请求需重新登录。无状态 HMAC token 无法逐个吊销，实现上
+         *     token 载荷内含 `tokenVersion`，每次请求与 `sys_user.token_version` 现查比对；
+         *     重置密码时该用户 `token_version + 1`，旧 token 即全部失效。
          *     新密码不会在响应中回显。
          */
         post: operations["resetUserPassword"];
@@ -756,7 +759,7 @@ export interface paths {
          * @description 需要 `sys:role:edit`。**全量替换**该角色的权限点集合（先删后插，事务内完成）；
          *     传空数组即清空。权限点取值见 `PermissionCode`。
          *     **防自我提权**：提交的权限点必须是操作者自身权限点的子集；包含
-         *     `payroll:export`、`payroll:sensitive:view`、`sys:role:grant:all` 等
+         *     `payroll:export`、`sys:role:grant:all` 等
          *     操作者未持有的权限点即越权，返回 403。
          */
         put: operations["replaceRoleGrants"];
@@ -813,6 +816,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 系统参数列表
+         * @description 需要 `sys:config:view`。返回全部业务参数及其类型、说明与是否可编辑。
+         *     当前参数清单与取值范围：
+         *     - `payroll.monthly-payable-days`（DECIMAL，默认 `21.75`）：月平均计薪天数，
+         *       取值 > 0 且 ≤ 31；
+         *     - `payroll.seniority-pay-per-year`（DECIMAL，默认 `100`）：工龄工资每年金额，
+         *       取值 ≥ 0；
+         *     - `payroll.calendar.holidays`（DATE_LIST，默认空）：法定节假日，逗号分隔的
+         *       ISO 日期（如 `2026-01-01,2026-02-17`），用于计薪天数计算。
+         */
+        get: operations["listConfigs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configs/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改系统参数
+         * @description 需要 `sys:config:edit`（高危，与 `sys:role:grant:all` 同档）。
+         *     `editable=false` 的参数返回 403；`value` 与 `valueType` 格式不符返回 400；
+         *     未知 key 返回 400。修改后立即生效并写审计日志。
+         */
+        put: operations["updateConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -840,13 +892,13 @@ export interface components {
          *     - 核算：`payroll:record:view`、`payroll:record:edit`
          *     - 期间：`payroll:period:lock`、`payroll:period:unlock`
          *     - 导入导出：`payroll:import:submit`、`payroll:export`
-         *     - 敏感字段：`payroll:sensitive:view`
          *     - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
-         *       `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`
+         *       `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
+         *       `sys:config:view`、`sys:config:edit`
          * @example sys:user:view
          * @enum {string}
          */
-        PermissionCode: "payroll:record:view" | "payroll:record:edit" | "payroll:period:lock" | "payroll:period:unlock" | "payroll:import:submit" | "payroll:export" | "payroll:sensitive:view" | "sys:user:view" | "sys:user:edit" | "sys:role:view" | "sys:role:edit" | "sys:role:grant:all" | "sys:dept:edit" | "sys:company:edit";
+        PermissionCode: "payroll:record:view" | "payroll:record:edit" | "payroll:period:lock" | "payroll:period:unlock" | "payroll:import:submit" | "payroll:export" | "sys:user:view" | "sys:user:edit" | "sys:role:view" | "sys:role:edit" | "sys:role:grant:all" | "sys:dept:edit" | "sys:company:edit" | "sys:config:view" | "sys:config:edit";
         /**
          * Format: int32
          * @description 业务状态码。0=成功；400=参数校验失败；401=未认证；403=无权限；
@@ -1026,6 +1078,18 @@ export interface components {
             workStartDate?: string | null;
             /** Format: date */
             leaveDate?: string | null;
+            /**
+             * @description 本单位工龄。派生值，由入职日期（`hireDate`）计算，不接受写入；
+             *     整年向下取整后保留 2 位小数。
+             * @example 6.00
+             */
+            seniorityYears: string;
+            /**
+             * @description 社会工龄。派生值，由社会工龄起算日（`workStartDate`）计算，不接受写入；
+             *     整年向下取整后保留 2 位小数；`workStartDate` 为空时返回 null。
+             * @example 8.00
+             */
+            socialSeniorityYears?: string | null;
             /**
              * @description 1在职 2离职 3停薪留职
              * @enum {integer}
@@ -1473,6 +1537,29 @@ export interface components {
              */
             module: "PAYROLL" | "SYS";
         };
+        /**
+         * @description 参数值类型
+         * @enum {string}
+         */
+        ConfigValueType: "DECIMAL" | "INT" | "STRING" | "DATE_LIST";
+        /** @description 业务参数。`value` 一律为字符串，按 `valueType` 解析。 */
+        ConfigItem: {
+            /** @example payroll.monthly-payable-days */
+            key: string;
+            /** @example 21.75 */
+            value: string;
+            valueType: components["schemas"]["ConfigValueType"];
+            description: string;
+            /** @description false 时修改返回 403 */
+            editable: boolean;
+        };
+        ConfigUpdateRequest: {
+            /**
+             * @description 按参数 `valueType` 校验：DECIMAL 为十进制字符串、INT 为整数、
+             *     STRING 原样保存、DATE_LIST 为逗号分隔的 ISO 日期（`YYYY-MM-DD`）。
+             */
+            value: string;
+        };
         /** @description 系统用户。密码哈希永不返回；手机号只返回掩码。 */
         User: {
             id: components["schemas"]["Id"];
@@ -1534,7 +1621,7 @@ export interface components {
         ResetPasswordRequest: {
             /**
              * Format: password
-             * @description 重置后旧密码立即失效；该用户下次请求需重新登录（比对 `pwd_changed_at`）
+             * @description 重置后旧密码立即失效；该用户下次请求需重新登录（token 内含版本号，每请求比对 `sys_user.token_version`，重置时 +1）
              */
             newPassword: string;
         };
@@ -1819,6 +1906,18 @@ export interface components {
             /** @example ok */
             msg: string;
             data: components["schemas"]["PermissionItem"][];
+        };
+        ResultConfigList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["ConfigItem"][];
+        };
+        ResultConfig: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["ConfigItem"];
         };
     };
     responses: {
@@ -2655,7 +2754,7 @@ export interface operations {
                 "multipart/form-data": {
                     /**
                      * Format: binary
-                     * @description xlsx 文件，≤ 10MB、≤ 5 万行
+                     * @description xlsx 文件，≤ 50MB、≤ 5 万行
                      */
                     file: string;
                     periodId: components["schemas"]["Id"];
@@ -3308,6 +3407,60 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 参数列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultConfigList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 参数键，如 payroll.monthly-payable-days */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回更新后的参数 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultConfig"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };

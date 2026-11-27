@@ -46,7 +46,6 @@ export const DEMO_USER: CurrentUser = {
     'payroll:period:unlock',
     'payroll:import:submit',
     'payroll:export',
-    'payroll:sensitive:view',
     'sys:user:view',
     'sys:user:edit',
     'sys:role:view',
@@ -88,10 +87,7 @@ export const DEPTS: Dept[] = [
   { id: '10', companyId: '2', parentId: '0', deptCode: 'SHFIN', deptName: '上海财务部', ancestors: ',0,', sortNo: 10, status: 1 },
 ]
 
-/** mock 人员：后端正在给 EmployeeDTO 补工龄字段，这里先带上用于界面展示 */
-type MockEmployee = Employee & { seniorityYears?: string; socialSeniorityYears?: string }
-
-export const EMPLOYEES: MockEmployee[] = [
+export const EMPLOYEES: Employee[] = [
   {
     id: '1',
     companyId: '1',
@@ -275,7 +271,6 @@ export const PERMISSIONS: PermissionItem[] = [
   { code: 'payroll:period:unlock', name: '解锁期间（高危）', module: 'PAYROLL' },
   { code: 'payroll:import:submit', name: '导入提交', module: 'PAYROLL' },
   { code: 'payroll:export', name: '导出（高危）', module: 'PAYROLL' },
-  { code: 'payroll:sensitive:view', name: '查看完整证件号/手机号', module: 'PAYROLL' },
   { code: 'sys:user:view', name: '查看用户', module: 'SYS' },
   { code: 'sys:user:edit', name: '维护用户', module: 'SYS' },
   { code: 'sys:role:view', name: '查看角色', module: 'SYS' },

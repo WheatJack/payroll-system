@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import type { Employee } from '@/api/models'
 import { employeeDeptLabel, employeeSeniority, employeeSocialSeniority } from '../employee'
 
-function employee(overrides: Partial<Employee> & Record<string, unknown> = {}): Employee {
+function employee(overrides: Record<string, unknown> = {}): Employee {
   return {
     id: '1',
     companyId: '1',
@@ -32,7 +32,7 @@ describe('人员工龄与部门展示', () => {
     expect(employeeSocialSeniority(employee({ socialSeniorityYears: '7.50' }))).toBe('7.50')
   })
 
-  test('契约 v1.1 还没有该字段时显示 — 而不是 undefined/NaN', () => {
+  test('后端暂未返回该字段（运行时 undefined/null/空串）时显示 — 而不是 undefined/NaN', () => {
     expect(employeeSeniority(employee())).toBe('—')
     expect(employeeSocialSeniority(employee())).toBe('—')
     expect(employeeSeniority(employee({ seniorityYears: '' }))).toBe('—')

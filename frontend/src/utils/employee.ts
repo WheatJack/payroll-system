@@ -1,16 +1,11 @@
 /**
  * 人员展示辅助。
  *
- * `seniorityYears` / `socialSeniorityYears` 是后端正在补的字段（EmployeeDTO），
- * 当前冻结的 v1.1 契约里还没有。这里用**局部扩展类型**读取并做空值兜底，
- * 不改 `api/types.ts`（必须由契约生成）；等契约更新后删掉这层 shim 即可。
+ * `seniorityYears` 在契约里是 required、`socialSeniorityYears` 可空；
+ * 但后端 `GET /employees` 目前还没返回这两个字段，真实联调时会短暂拿到 undefined，
+ * 因此这里保留**运行时**兜底（缺失/空串/null 一律显示 `—`），不做类型层面的假设。
  */
 import type { Employee } from '@/api/models'
-
-type EmployeeWithSeniority = Employee & {
-  seniorityYears?: string | null
-  socialSeniorityYears?: string | null
-}
 
 function pickDecimal(value: string | null | undefined): string {
   return value && value.trim() !== '' ? value : '—'
@@ -18,12 +13,12 @@ function pickDecimal(value: string | null | undefined): string {
 
 /** 本司工龄（按入职日期计算，只读）。 */
 export function employeeSeniority(row: Employee): string {
-  return pickDecimal((row as EmployeeWithSeniority).seniorityYears)
+  return pickDecimal(row.seniorityYears)
 }
 
 /** 社会工龄（按参加工作时间计算，只读）。 */
 export function employeeSocialSeniority(row: Employee): string {
-  return pickDecimal((row as EmployeeWithSeniority).socialSeniorityYears)
+  return pickDecimal(row.socialSeniorityYears)
 }
 
 /** 部门展示：优先 deptName，缺失才退回 deptId。 */

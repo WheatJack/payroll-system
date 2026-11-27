@@ -285,6 +285,9 @@ export const handlers = [
       deptId: String(body.deptId),
       deptName: DEPTS.find((dept) => dept.id === String(body.deptId))?.deptName ?? '',
       hireDate: String(body.hireDate),
+      // 工龄由后端按入职日期计算；mock 新建时先给 0
+      seniorityYears: '0.00',
+      socialSeniorityYears: null,
       workStartDate: body.workStartDate ? String(body.workStartDate) : null,
       leaveDate: body.leaveDate ? String(body.leaveDate) : null,
       status: (Number(body.status ?? 1) as 1 | 2 | 3) ?? 1,

@@ -40,7 +40,7 @@ describe('登录落地页选择', () => {
   test('没有任何页面权限时返回 null（走兜底页，不进 403 死循环）', () => {
     expect(resolveLandingPath([])).toBeNull()
     expect(resolveLandingPath(['payroll:export'])).toBeNull()
-    expect(resolveLandingPath(['payroll:sensitive:view'])).toBeNull()
+    expect(resolveLandingPath(['sys:user:edit'])).toBeNull()
   })
 
   test('落地清单里的权限与菜单入口保持一致（防止清单漂移）', () => {

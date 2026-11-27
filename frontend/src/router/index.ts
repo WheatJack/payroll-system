@@ -5,7 +5,7 @@ import { resolveLandingPath } from '@/utils/landing'
 /**
  * 权限点（详细设计 §4.7）：
  * payroll:record:view / record:edit / period:lock / period:unlock /
- * import:submit / export / sensitive:view
+ * import:submit / export / 系统管理 sys:*
  */
 const routes: RouteRecordRaw[] = [
   {
