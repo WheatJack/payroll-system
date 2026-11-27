@@ -1005,6 +1005,8 @@ paths:
         需要 `payroll:record:view`。按部门汇总的月度数据；仅统计 `LOCKED` 与
         `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
         `COMPANY`/`ALL`）过滤。
+        响应 `data` 为 `{rows, excludedPeriods}`；`excludedPeriods` 列出范围内
+        有明细但因未锁定（`DRAFT`/`EDITING`）而未纳入统计的期间（非集团账号只列本主体）。
       operationId: getMonthlyReport
       x-milestone: M1.5
       parameters:
@@ -1048,6 +1050,8 @@ paths:
         需要 `payroll:record:view`。按人或按部门汇总的年度数据；仅统计 `LOCKED` 与
         `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
         `COMPANY`/`ALL`）过滤。
+        响应 `data` 为 `{rows, excludedPeriods}`；`excludedPeriods` 列出范围内
+        有明细但因未锁定（`DRAFT`/`EDITING`）而未纳入统计的期间（非集团账号只列本主体）。
         `groupBy=DEPT` 且操作者数据范围含多个主体时 `companyId` 必填，缺则 400。
       operationId: getAnnualReport
       x-milestone: M1.5
@@ -2606,6 +2610,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RunError'
+        warnings:
+          type: array
+          description: |
+            生成时的业务警告，如「本期有 N 人按不足月折算，但法定节假日未配置」；
+            无警告时为空数组。
+          items:
+            type: string
         skipped:
           type: object
           description: 被跳过的人员，键为工号，值为原因（如“未配置薪酬档案”）
@@ -2898,8 +2909,9 @@ components:
       description: |
         仅统计 `LOCKED` 与 `ARCHIVED` 期间；年度按**归属期间**归集，
         13 薪与年终奖计入其归属月份所在年度。
-        `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
-        因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
+        按部门分组时 `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+        因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验；
+        按人分组时 `employeeCount` 为 null，月份数见 `monthCount`。
       required:
         [year, groupBy, employeeCount, grossAmount, deductionAmount, netAmount]
       properties:
@@ -2929,12 +2941,54 @@ components:
           nullable: true
         employeeCount:
           type: integer
+          nullable: true
+          description: 按部门分组时为去重后的在职人数；按人分组时为 null
+        monthCount:
+          type: integer
+          nullable: true
+          description: 按人分组时表示该员工有工资的月份数；按部门分组时为 null
         grossAmount:
           $ref: '#/components/schemas/Money'
         deductionAmount:
           $ref: '#/components/schemas/Money'
         netAmount:
           $ref: '#/components/schemas/Money'
+
+    MonthlyReportResult:
+      type: object
+      description: |
+        月度汇总结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+        （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+      required: [rows, excludedPeriods]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonthlyReportRow'
+        excludedPeriods:
+          type: array
+          description: 未纳入统计的期间（`periodYm`）
+          items:
+            type: string
+            pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+
+    AnnualReportResult:
+      type: object
+      description: |
+        年度汇总结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+        （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+      required: [rows, excludedPeriods]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnnualReportRow'
+        excludedPeriods:
+          type: array
+          description: 未纳入统计的期间（`periodYm`）
+          items:
+            type: string
+            pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
 
     # ---------------------------------------------------------------
     # 报表导出（M1.5）
@@ -3029,6 +3083,11 @@ components:
         editable:
           type: boolean
           description: false 时修改返回 403
+        warning:
+          type: string
+          nullable: true
+          description: 参数值有问题时的警示文案（如法定节假日为空），正常时为 null
+          example: 法定节假日未配置，将按默认计薪天数计算
 
     ConfigUpdateRequest:
       type: object
@@ -3640,9 +3699,7 @@ components:
           type: string
           example: ok
         data:
-          type: array
-          items:
-            $ref: '#/components/schemas/MonthlyReportRow'
+          $ref: '#/components/schemas/MonthlyReportResult'
 
     ResultAnnualReport:
       type: object
@@ -3654,9 +3711,7 @@ components:
           type: string
           example: ok
         data:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnnualReportRow'
+          $ref: '#/components/schemas/AnnualReportResult'
 
     ResultCompany:
       type: object
