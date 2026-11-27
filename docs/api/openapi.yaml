@@ -85,6 +85,8 @@ tags:
       权限点：`sys:user:view` / `sys:user:edit` / `sys:role:view` /
       `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit` /
       `sys:config:view` / `sys:config:edit`。
+  - name: 个税社保
+    description: M2.5 能力：参保信息、专项附加扣除与年度个税核对
 security:
   - bearerAuth: []
 servers:
@@ -413,6 +415,207 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResultEmployeeSensitive'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees/{id}/social-insurance:
+    get:
+      tags: [个税社保]
+      summary: 员工参保信息
+      description: 需要 `payroll:record:view`，按当前用户数据范围过滤。返回该员工的参保区间列表。
+      operationId: listSocialInsurance
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 参保信息列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultSocialInsuranceList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [个税社保]
+      summary: 新增参保信息
+      description: 需要 `payroll:record:edit`。校验同一员工的生效区间不重叠；重叠返回 409。
+      operationId: createSocialInsurance
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialInsuranceCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回参保信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultSocialInsurance'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/employees/{id}/special-deductions:
+    get:
+      tags: [个税社保]
+      summary: 员工专项附加扣除
+      description: 需要 `payroll:record:view`，按当前用户数据范围过滤。
+      operationId: listSpecialDeductions
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 专项附加扣除列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultSpecialDeductionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [个税社保]
+      summary: 新增专项附加扣除
+      description: 需要 `payroll:record:edit`。
+      operationId: createSpecialDeduction
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpecialDeductionCreateRequest'
+      responses:
+        '200':
+          description: 新增成功，返回专项附加扣除
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultSpecialDeduction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/social-insurance/{id}:
+    put:
+      tags: [个税社保]
+      summary: 修改参保信息
+      description: 需要 `payroll:record:edit`。只提交需要修改的字段；区间冲突返回 409。
+      operationId: updateSocialInsurance
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialInsuranceUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回参保信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultSocialInsurance'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/special-deductions/{id}:
+    delete:
+      tags: [个税社保]
+      summary: 删除专项附加扣除
+      description: 需要 `payroll:record:edit`。删除指定专项附加扣除记录。
+      operationId: deleteSpecialDeduction
+      x-milestone: M2.5
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: 删除成功，`data` 为 null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Result'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/insurance-params:
+    get:
+      tags: [个税社保]
+      summary: 城市社保/公积金参数
+      description: |
+        需要 `payroll:record:view`。返回指定城市各险种的个人比例、基数上下限与
+        附加金额（`extraAmount`，如大病医疗固定额）。
+      operationId: listInsuranceParams
+      x-milestone: M2.5
+      parameters:
+        - name: cityCode
+          in: query
+          required: true
+          description: 城市编码
+          schema:
+            type: string
+            maxLength: 32
+      responses:
+        '200':
+          description: 该城市的险种参数列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultInsuranceParamList'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1216,6 +1419,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResultAnnualReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/reports/annual-tax:
+    get:
+      tags: [报表]
+      summary: 年度个税核对
+      description: |
+        需要 `payroll:record:view`，按当前用户数据范围过滤。
+        仅统计 `LOCKED` 与 `ARCHIVED` 期间；响应 `data` 为 `{rows, excludedPeriods}`，
+        `excludedPeriods` 的含义与月度/年度报表一致。
+      operationId: getAnnualTaxReport
+      x-milestone: M2.5
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{4}$'
+        - name: employeeId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: deptId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: 年度个税核对行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultAnnualTaxReport'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2446,6 +2692,197 @@ components:
           type: integer
         size:
           type: integer
+
+    # ---------------------------------------------------------------
+    # 个税社保（M2.5）
+    # ---------------------------------------------------------------
+    DeductionType:
+      type: string
+      description: 专项附加扣除类型
+      enum:
+        [CHILD_EDU, INFANT_CARE, CONTINUE_EDU, HOUSING_LOAN, HOUSING_RENT, ELDERLY_CARE]
+
+    SocialInsurance:
+      type: object
+      description: 员工参保信息（按生效区间版本化）。
+      required: [id, employeeId, cityCode, effectiveFrom]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        employeeId:
+          $ref: '#/components/schemas/Id'
+        cityCode:
+          type: string
+          maxLength: 32
+        socialBase:
+          $ref: '#/components/schemas/Money'
+        housingFundRate:
+          $ref: '#/components/schemas/DecimalString'
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+
+    SocialInsuranceCreateRequest:
+      type: object
+      required: [cityCode, effectiveFrom]
+      properties:
+        cityCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        socialBase:
+          $ref: '#/components/schemas/Money'
+        housingFundRate:
+          $ref: '#/components/schemas/DecimalString'
+        effectiveFrom:
+          type: string
+          format: date
+
+    SocialInsuranceUpdateRequest:
+      type: object
+      description: 只提交需要修改的字段。
+      properties:
+        cityCode:
+          type: string
+          minLength: 1
+          maxLength: 32
+        socialBase:
+          $ref: '#/components/schemas/Money'
+        housingFundRate:
+          $ref: '#/components/schemas/DecimalString'
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+
+    InsuranceParam:
+      type: object
+      description: 某城市某险种的个人缴纳参数。
+      required: [insuranceType, personalRate, baseMin, baseMax, extraAmount]
+      properties:
+        insuranceType:
+          type: string
+          maxLength: 32
+          description: 险种类型，如 PENSION / MEDICAL / UNEMPLOYMENT / INJURY / MATERNITY / HOUSING_FUND
+          example: PENSION
+        personalRate:
+          $ref: '#/components/schemas/DecimalString'
+        baseMin:
+          $ref: '#/components/schemas/Money'
+        baseMax:
+          $ref: '#/components/schemas/Money'
+        extraAmount:
+          $ref: '#/components/schemas/Money'
+
+    SpecialDeduction:
+      type: object
+      description: 员工专项附加扣除（按生效区间版本化）。
+      required: [id, employeeId, deductionType, monthlyAmount, effectiveFrom]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        employeeId:
+          $ref: '#/components/schemas/Id'
+        deductionType:
+          $ref: '#/components/schemas/DeductionType'
+        monthlyAmount:
+          $ref: '#/components/schemas/Money'
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    SpecialDeductionCreateRequest:
+      type: object
+      required: [deductionType, monthlyAmount, effectiveFrom]
+      properties:
+        deductionType:
+          $ref: '#/components/schemas/DeductionType'
+        monthlyAmount:
+          $ref: '#/components/schemas/Money'
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+          nullable: true
+        remark:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    AnnualTaxRow:
+      type: object
+      description: 年度个税核对行。金额为字符串，`paidMonths` 为有工资的月份数。
+      required:
+        [empNo, empName, deptName, paidMonths, cumIncome, cumBasicDeduction, cumSocial,
+         cumFund, cumSpecial, taxable, cumTax, lastTax, effectiveRate]
+      properties:
+        empNo:
+          type: string
+          maxLength: 32
+        empName:
+          type: string
+          maxLength: 64
+        deptName:
+          type: string
+          maxLength: 64
+        paidMonths:
+          type: integer
+        cumIncome:
+          $ref: '#/components/schemas/Money'
+        cumBasicDeduction:
+          $ref: '#/components/schemas/Money'
+        cumSocial:
+          $ref: '#/components/schemas/Money'
+        cumFund:
+          $ref: '#/components/schemas/Money'
+        cumSpecial:
+          $ref: '#/components/schemas/Money'
+        taxable:
+          $ref: '#/components/schemas/Money'
+        cumTax:
+          $ref: '#/components/schemas/Money'
+        lastTax:
+          $ref: '#/components/schemas/Money'
+        effectiveRate:
+          type: string
+          description: 实际税率，四位小数
+          pattern: '^[0-9]{1,3}\.[0-9]{4}$'
+          example: '0.1000'
+
+    AnnualTaxReportResult:
+      type: object
+      description: |
+        年度个税核对结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+        （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+      required: [rows, excludedPeriods]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnnualTaxRow'
+        excludedPeriods:
+          type: array
+          description: 未纳入统计的期间（`periodYm`）
+          items:
+            type: string
+            pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
 
     # ---------------------------------------------------------------
     # 薪酬档案
@@ -3984,3 +4421,81 @@ components:
           example: ok
         data:
           $ref: '#/components/schemas/ConfigItem'
+
+    ResultSocialInsuranceList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialInsurance'
+
+    ResultSocialInsurance:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/SocialInsurance'
+
+    ResultSpecialDeductionList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpecialDeduction'
+
+    ResultSpecialDeduction:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/SpecialDeduction'
+
+    ResultInsuranceParamList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InsuranceParam'
+
+    ResultAnnualTaxReport:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/AnnualTaxReportResult'
