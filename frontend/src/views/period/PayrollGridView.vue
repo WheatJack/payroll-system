@@ -23,6 +23,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
+import { footerTotalLabel, isGridFilterActive } from '@/utils/grid'
 import { sumMoneyColumn } from '@/utils/report'
 import { buildPayslipParams, buildPeriodSheetParams, payslipExportBlockedReason } from '@/utils/export'
 import { SENIORITY_TOOLTIP } from '@/utils/employee'
@@ -220,15 +221,13 @@ const totals = computed(() => {
   return { perColumn, gross, deduction, net: sub(gross, deduction) }
 })
 
-const filterActive = computed(
-  () => Boolean(store.filter.deptId || store.filter.employeeType || store.filter.keyword?.trim()),
-)
+const filterActive = computed(() => isGridFilterActive(store.filter))
 
 function footerMethod({ columns: footerColumns }: { columns: Array<{ field?: string }> }): string[][] {
   // 只放逐列合计。应发/扣款/实发是跨列的方向汇总，塞进页脚会被挤进窄列折行，
   // 改为在表格下方单独一条横栏展示（见模板中的 .grid-summary）。
   const perColumnRow = footerColumns.map((column, index) => {
-    if (index === 0) return filterActive.value ? '合计（筛选后）' : '合计'
+    if (index === 0) return footerTotalLabel(filterActive.value)
     const field = column.field
     if (field && totals.value.perColumn[field] !== undefined) return format(totals.value.perColumn[field])
     return ''
@@ -244,19 +243,33 @@ async function refreshTotals() {
 
 /* ------------------------- 区域选择与粘贴 ------------------------- */
 
+/**
+ * 选区锚点用 recordId 而不是行号：虚拟滚动下行号只代表「当前可视窗口内的序号」，
+ * 一滚动就失效；recordId 才是数据坐标。
+ */
 interface CellRef {
-  rowIndex: number
+  recordId: string
   colIndex: number
 }
 
 const anchor = ref<CellRef | null>(null)
 const focusCell = ref<CellRef | null>(null)
 
+/** recordId -> 在 visibleRows 中的下标（选区与粘贴都基于这个映射换算） */
+const visibleIndexMap = computed(() => {
+  const map = new Map<string, number>()
+  store.visibleRows.forEach((row, index) => map.set(row.recordId, index))
+  return map
+})
+
 const selection = computed(() => {
   if (!anchor.value || !focusCell.value) return null
+  const anchorIndex = visibleIndexMap.value.get(anchor.value.recordId)
+  const focusIndex = visibleIndexMap.value.get(focusCell.value.recordId)
+  if (anchorIndex === undefined || focusIndex === undefined) return null
   return {
-    top: Math.min(anchor.value.rowIndex, focusCell.value.rowIndex),
-    bottom: Math.max(anchor.value.rowIndex, focusCell.value.rowIndex),
+    top: Math.min(anchorIndex, focusIndex),
+    bottom: Math.max(anchorIndex, focusIndex),
     left: Math.min(anchor.value.colIndex, focusCell.value.colIndex),
     right: Math.max(anchor.value.colIndex, focusCell.value.colIndex),
   }
@@ -268,8 +281,8 @@ const selectionText = computed(() => {
   return `已选 ${range.bottom - range.top + 1} 行 × ${range.right - range.left + 1} 列`
 })
 
-function onCellClick(params: { rowIndex: number; columnIndex: number; $event: Event }) {
-  const cell = { rowIndex: params.rowIndex, colIndex: params.columnIndex }
+function onCellClick(params: { row: GridRow; columnIndex: number; $event: Event }) {
+  const cell = { recordId: params.row.recordId, colIndex: params.columnIndex }
   if ((params.$event as MouseEvent).shiftKey && anchor.value) focusCell.value = cell
   else {
     anchor.value = cell
@@ -277,9 +290,11 @@ function onCellClick(params: { rowIndex: number; columnIndex: number; $event: Ev
   }
 }
 
-function cellClassName({ rowIndex, columnIndex }: { rowIndex: number; columnIndex: number }): string {
+function cellClassName({ row, columnIndex }: { row: GridRow; columnIndex: number }): string {
   const range = selection.value
-  if (!range) return ''
+  if (!range || !row) return ''
+  const rowIndex = visibleIndexMap.value.get(row.recordId)
+  if (rowIndex === undefined) return ''
   return rowIndex >= range.top && rowIndex <= range.bottom && columnIndex >= range.left && columnIndex <= range.right
     ? 'grid-cell-selected'
     : ''
@@ -507,7 +522,10 @@ onBeforeUnmount(() => {
         stripe
         show-footer
         :footer-method="footerMethod"
+        :scroll-y="{ enabled: true, gt: 50 }"
+        :scroll-x="{ enabled: true, gt: 20 }"
         :row-config="{ keyField: 'recordId', isHover: true }"
+        :cell-config="{ height: 36 }"
         :edit-config="editable ? { trigger: 'dblclick', mode: 'cell', showIcon: false } : undefined"
         :cell-class-name="cellClassName"
         :row-class-name="rowClassName"
@@ -576,6 +594,7 @@ onBeforeUnmount(() => {
       <span class="summary-item">应发合计 <b>{{ format(totals.gross) }}</b></span>
       <span class="summary-item">扣款合计 <b>{{ format(totals.deduction) }}</b></span>
       <span class="summary-item summary-net">实发合计 <b>{{ format(totals.net) }}</b></span>
+      <span v-if="filterActive" class="summary-note muted">* 表尾合计按当前筛选结果计算</span>
     </div>
   </div>
 </template>
@@ -594,6 +613,10 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 /* 方向汇总放在表格外的横栏：页脚列宽只有 80–140px，长文本放进去必然折行 */
+.summary-note {
+  margin-left: auto;
+  font-size: 12px;
+}
 .grid-summary {
   display: flex;
   justify-content: flex-end;
