@@ -6,7 +6,6 @@ import com.insbean.payroll.domain.entity.SysCompanyEntity;
 import com.insbean.payroll.org.dto.CompanyDTO;
 import com.insbean.payroll.org.mapper.CompanyMapper;
 import com.insbean.payroll.security.CurrentUser;
-import com.insbean.payroll.security.RequirePerm;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,7 +22,12 @@ public class CompanyController {
         this.companyMapper = companyMapper;
     }
 
-    @RequirePerm("payroll:record:view")
+    /**
+     * 主体列表是公共基础数据：登录即可读，不挂功能权限点。
+     *
+     * <p>曾误挂 {@code payroll:record:view}，导致纯系统管理员读不到主体列表；
+     * 写入由 {@code CompanyAdminController} 的 {@code sys:company:edit} 把关。
+     */
     @GetMapping
     public Result<List<CompanyDTO>> list() {
         CurrentUser current = CurrentUser.get();
