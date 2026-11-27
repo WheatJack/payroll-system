@@ -15,6 +15,7 @@ import com.insbean.payroll.record.dto.ChangesetChange;
 import com.insbean.payroll.record.dto.ChangesetItem;
 import com.insbean.payroll.record.dto.ChangesetReq;
 import com.insbean.payroll.record.mapper.PayRecordMapper;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
@@ -27,6 +28,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -591,6 +593,42 @@ class GenerateServiceTest extends AbstractDbTest {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pay_record_item WHERE record_id = ? AND item_code = ?",
                 Integer.class, recordId, itemCode);
+    }
+
+    @Test
+    void 部门级账号不能发起生成() {
+        // 先成功生成并锁定，确保走到"范围校验"而不是被期间状态挡住
+        generateService.startGenerate(periodId, OPERATOR);
+        periodService.lock(periodId, 2L);
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:record:edit"), "DEPT_SUB", null));
+
+        assertThatThrownBy(() -> generateService.startGenerate(periodId, 1L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("薪酬管理员")
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void 跳过明细按调用者数据范围过滤() {
+        jdbc.update("""
+                INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status)
+                VALUES (20, 1, 0, 'D020', '财务部', '', 20, 1)
+                """);
+        createEmployee("E998", "110101199001012222", TestDb.COMPANY_DEFAULT, 20L,
+                LocalDate.of(2020, 3, 1));
+
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+        periodService.lock(periodId, 2L);
+
+        // 部门 1 的主管只能看到本部门（E999）的跳过明细，看不到部门 20（E998）
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:record:view"), "DEPT_SUB", null));
+        RunProgressDTO progress = generateService.progress(runId);
+
+        assertThat(progress.skippedDetails()).extracting(d -> d.empNo()).contains("E999");
+        assertThat(progress.skippedDetails()).extracting(d -> d.empNo()).doesNotContain("E998");
+        assertThat(progress.skipped()).doesNotContainKey("E998");
     }
 
     private String itemSource(Long recordId, String itemCode) {

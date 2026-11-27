@@ -46,6 +46,7 @@ public class ImportValidator {
     private static final String TITLE_EMP_NAME = "姓名";
     private static final int MAX_RAW_VALUE = 512;
     private static final BigDecimal MAX_DECIMAL_18_4 = new BigDecimal("99999999999999.9999");
+    private static final BigDecimal MAX_BUSINESS_AMOUNT = new BigDecimal("1000000.00");
 
     private final PayRecordMapper recordMapper;
     private final ItemService itemService;
@@ -288,6 +289,12 @@ public class ImportValidator {
                     if (amount.signum() < 0) {
                         addError(excelRow, def.itemName(), raw, "AMOUNT_NEGATIVE",
                                 "金额不能为负数，扣款请使用减项科目");
+                        rowFailed = true;
+                        continue;
+                    }
+                    if (amount.abs().compareTo(MAX_BUSINESS_AMOUNT) > 0) {
+                        addError(excelRow, def.itemName(), raw, "AMOUNT_OUT_OF_RANGE",
+                                "金额超出合理范围（单项上限 1,000,000.00）");
                         rowFailed = true;
                         continue;
                     }

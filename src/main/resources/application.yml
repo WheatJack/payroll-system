@@ -13,6 +13,10 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
+      # 快速失败：默认 30s 会把 Tomcat 线程一起拖死，DB 故障扩散成整站不可用
+      connection-timeout: 3000
+      # 连接泄漏告警（60s），便于定位忘记释放的长事务
+      leak-detection-threshold: 60000
   jackson:
     time-zone: Asia/Shanghai
     date-format: yyyy-MM-dd HH:mm:ss
@@ -22,6 +26,14 @@ spring:
       # 行数上限仍由 payroll.import.max-rows 控制，这里只是别让文件先被容器拒掉。
       max-file-size: 50MB
       max-request-size: 50MB
+
+# OpenAPI 文档默认关闭：暴露 37 个路径/83 个 schema 等于把内部接口全图交给未认证访问者。
+# 本地开发用 --spring.profiles.active=dev（application-dev.yml 打开）。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
 
 mybatis-plus:
   configuration:

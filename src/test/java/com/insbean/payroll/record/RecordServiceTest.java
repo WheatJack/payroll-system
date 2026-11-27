@@ -282,6 +282,15 @@ class RecordServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 单项金额超过业务上限返回400() {
+        assertThatThrownBy(() -> recordService.applyChangeset(
+                periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "1000000.01"))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("合理范围")
+                .extracting("code").isEqualTo(400);
+    }
+
+    @Test
     void 超出DECIMAL18_4的金额返回400而不是500() {
         assertThatThrownBy(() -> recordService.applyChangeset(
                 periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "999999999999999.9999"))))

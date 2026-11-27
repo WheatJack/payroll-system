@@ -59,9 +59,12 @@ public class EmployeeService {
         if (req.hireDate() == null) {
             throw new BizException(400, "入职日期必填");
         }
+        requireLeaveAfterHire(req.hireDate(), req.leaveDate());
         Long companyId = req.companyId() != null ? req.companyId() : defaultCompanyId;
         dataScope.assertCompanyVisible(companyId);
         requireDeptOfCompany(companyId, req.deptId());
+        // 写之前校验部门范围：Controller 在提交后才 get() 会把"403"变成"已写入"
+        dataScope.assertDepartmentVisible(req.deptId());
 
         String hash = cryptoService.blindIndex(req.idNo());
         if (employeeMapper.countByIdNoHash(hash) > 0) {
@@ -178,14 +181,16 @@ public class EmployeeService {
         if (req.leaveDate() != null) {
             entity.setLeaveDate(req.leaveDate());
         }
+        requireLeaveAfterHire(entity.getHireDate(), entity.getLeaveDate());
         if (req.status() != null) {
             entity.setStatus(req.status());
         }
         if (req.remark() != null) {
             entity.setRemark(req.remark());
         }
-        // 调动/改部门后，部门必须仍属于员工所在主体（否则会出现"主体 1 的员工挂主体 3 的部门"）
+        // 调动/改部门后，部门必须仍属于员工所在主体，且在操作者数据范围内
         requireDeptOfCompany(entity.getCompanyId(), entity.getDeptId());
+        dataScope.assertDepartmentVisible(entity.getDeptId());
         employeeMapper.updateById(entity);
 
         if (!Objects.equals(previousCompany, entity.getCompanyId())
@@ -222,6 +227,7 @@ public class EmployeeService {
         dataScope.assertEmployeeVisible(employeeId);
         dataScope.assertCompanyVisible(companyId);
         requireDeptOfCompany(companyId, deptId);
+        dataScope.assertDepartmentVisible(deptId);
         requireEmployee(employeeId);
 
         EmpEmploymentEntity open = employmentMapper.selectOne(
@@ -309,6 +315,12 @@ public class EmployeeService {
     }
 
     /** 部门必须存在且属于该主体：否则组织数据跨越法人，部门筛选会整片漏人。 */
+    private static void requireLeaveAfterHire(LocalDate hireDate, LocalDate leaveDate) {
+        if (hireDate != null && leaveDate != null && leaveDate.isBefore(hireDate)) {
+            throw new BizException(400, "离职日期不能早于入职日期");
+        }
+    }
+
     private void requireDeptOfCompany(Long companyId, Long deptId) {
         SysDeptEntity dept = deptMapper.selectById(deptId);
         if (dept == null) {

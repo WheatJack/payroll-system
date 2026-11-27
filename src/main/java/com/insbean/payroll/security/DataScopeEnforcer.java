@@ -81,6 +81,33 @@ public class DataScopeEnforcer {
         }
     }
 
+    /**
+     * 部门写操作的范围校验：在落库之前拦截，避免"接口 403、数据已写入"。
+     */
+    public void assertDepartmentVisible(Long deptId) {
+        CurrentUser current = requireUser();
+        if (ALL.equals(current.dataScope())) {
+            return;
+        }
+        if (deptId == null) {
+            throw forbidden("无权在该部门下操作");
+        }
+        var dept = deptMapper.selectById(deptId);
+        if (dept == null) {
+            throw new BizException(400, "部门不存在：" + deptId);
+        }
+        boolean visible = switch (current.dataScope()) {
+            case COMPANY -> Objects.equals(dept.getCompanyId(), current.companyId());
+            case DEPT -> Objects.equals(dept.getId(), deptIdOf(current));
+            case DEPT_SUB -> Objects.equals(dept.getId(), deptIdOf(current))
+                    || deptMapper.findSubtreeIds(deptIdOf(current)).contains(dept.getId());
+            default -> false;
+        };
+        if (!visible) {
+            throw forbidden("无权在该部门下操作");
+        }
+    }
+
     public void assertEmployeeVisible(Long employeeId) {
         CurrentUser current = requireUser();
         if (ALL.equals(current.dataScope())) {

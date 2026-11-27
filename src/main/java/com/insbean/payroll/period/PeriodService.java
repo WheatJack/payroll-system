@@ -206,7 +206,11 @@ public class PeriodService {
     @Transactional
     public PeriodDTO lock(Long periodId, Long userId) {
         dataScope.assertPeriodVisible(periodId);
-        PayPeriodEntity period = requirePeriod(periodId);
+        // 行锁：并发双击锁定时第二个请求必须等第一个提交后再判断，否则两边都 200
+        PayPeriodEntity period = periodMapper.selectForUpdate(periodId);
+        if (period == null) {
+            throw new BizException(404, "工资期间不存在");
+        }
         PeriodStatus status = PeriodStatus.of(period.getStatus());
         if (status == PeriodStatus.LOCKED) {
             throw new BizException(409, "期间已锁定，无需重复锁定");
@@ -312,6 +316,12 @@ public class PeriodService {
         }
         Long companyId = req.companyId() != null ? req.companyId() : defaultCompanyId;
         dataScope.assertCompanyVisible(companyId);
+        // 期间是公司级对象：部门级账号不能创建（否则能对整个公司发起核算）
+        CurrentUser current = CurrentUser.get();
+        if (current == null || (!DataScopeEnforcer.ALL.equals(current.dataScope())
+                && !DataScopeEnforcer.COMPANY.equals(current.dataScope()))) {
+            throw new BizException(403, "仅薪酬管理员可以创建工资期间");
+        }
         PayPeriodEntity existing = findByCompanyAndYm(companyId, periodYm);
         if (existing != null) {
             return toDto(existing);

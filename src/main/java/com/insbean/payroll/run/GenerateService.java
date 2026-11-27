@@ -31,6 +31,7 @@ import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.mapper.PeriodMapper;
 import com.insbean.payroll.record.PeriodTotalsRefresher;
 import com.insbean.payroll.record.RecordAssembler;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.run.dto.RunErrorDTO;
@@ -167,6 +168,12 @@ public class GenerateService {
      */
     public Long startGenerate(Long periodId, Long operatorId) {
         dataScope.assertPeriodVisible(periodId);
+        // 生成是全公司级动作：部门级账号即使有 record:edit 也不能触发
+        CurrentUser current = CurrentUser.get();
+        if (current == null || (!DataScopeEnforcer.ALL.equals(current.dataScope())
+                && !DataScopeEnforcer.COMPANY.equals(current.dataScope()))) {
+            throw new BizException(403, "仅薪酬管理员可以发起核算生成");
+        }
         PayPeriodEntity period = periodService.requirePeriod(periodId);
         periodService.assertWritable(periodId);
 
@@ -175,6 +182,8 @@ public class GenerateService {
             throw new BizException(409, "该期间正在处理中，请稍后再试");
         }
 
+        // 已拿到租约，说明之前的 RUNNING 批次即使存在也已经是孤儿（进程被杀）
+        runMapper.failRunningByPeriod(periodId, RunRecoveryRunner.INTERRUPTED);
         PayRunEntity run = openRun(periodId, operatorId);
         Progress progress = new Progress();
         try {
@@ -230,6 +239,18 @@ public class GenerateService {
                 .stream()
                 .map(e -> new RunSkipDetail(e.getEmpNo(), e.getEmpName(), e.getReason()))
                 .toList();
+
+        // 部门级账号只看得到自己范围内的人：跳过名单/失败明细都含姓名+工号，不能跨部门泄漏
+        if (!broadScope()) {
+            Set<String> visible = visibleEmpNos(errors, skippedDetails, progress.skipped);
+            skippedDetails = skippedDetails.stream()
+                    .filter(d -> visible.contains(d.empNo())).toList();
+            errors = errors.stream()
+                    .filter(e -> e.empNo() == null || e.empNo().isEmpty() || visible.contains(e.empNo()))
+                    .toList();
+            progress.skipped.keySet().retainAll(visible);
+        }
+
         return new RunProgressDTO(run.getStatus(), progress.total, progress.success,
                 progress.failed, errors, progress.skipped, progress.warnings, skippedDetails);
     }
@@ -544,6 +565,34 @@ public class GenerateService {
         } catch (RuntimeException e) {
             log.warn("跳过明细持久化失败: {}", e.getMessage());
         }
+    }
+
+    private static boolean broadScope() {
+        CurrentUser current = CurrentUser.get();
+        return current == null || DataScopeEnforcer.ALL.equals(current.dataScope())
+                || DataScopeEnforcer.COMPANY.equals(current.dataScope());
+    }
+
+    private Set<String> visibleEmpNos(List<RunErrorDTO> errors, List<RunSkipDetail> details,
+                                      Map<String, String> skipped) {
+        Set<String> empNos = new LinkedHashSet<>();
+        errors.forEach(e -> {
+            if (e.empNo() != null && !e.empNo().isBlank()) {
+                empNos.add(e.empNo());
+            }
+        });
+        details.forEach(d -> empNos.add(d.empNo()));
+        empNos.addAll(skipped.keySet());
+        if (empNos.isEmpty()) {
+            return Set.of();
+        }
+        var query = Wrappers.<EmpEmployeeEntity>lambdaQuery()
+                .in(EmpEmployeeEntity::getEmpNo, empNos)
+                .eq(EmpEmployeeEntity::getDeleted, 0);
+        dataScope.applyEmployeeFilter(query);
+        return employeeMapper.selectList(query).stream()
+                .map(EmpEmployeeEntity::getEmpNo)
+                .collect(Collectors.toSet());
     }
 
     /** 把上次生成失败人数写到期间上，前端在期间列表即可看到"有 N 人没算"。 */

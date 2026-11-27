@@ -40,6 +40,17 @@ public interface PeriodMapper extends BaseMapper<PayPeriodEntity> {
             """)
     int isLeaseActive(@Param("id") Long id);
 
+    /** 启动对账：清掉所有已过期的生成租约，避免进程被杀后锁死期间。 */
+    @Update("""
+            UPDATE pay_period
+               SET processing_owner = NULL,
+                   processing_expire_at = NULL,
+                   version = version + 1
+             WHERE processing_owner IS NOT NULL
+               AND (processing_expire_at IS NULL OR processing_expire_at < NOW(6))
+            """)
+    int releaseExpiredLeases();
+
     /** 最近一次生成批次的状态；期间从未生成过返回 null。 */
     @Select("SELECT status FROM pay_run WHERE period_id = #{periodId} ORDER BY id DESC LIMIT 1")
     String findLatestRunStatus(@Param("periodId") Long periodId);

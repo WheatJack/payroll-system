@@ -388,6 +388,19 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 错误的HTTP方法返回405() throws Exception {
+        MvcResult result = mvc.perform(delete("/api/v1/periods")).andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(405);
+        assertThat(objectMapper.readTree(body(result)).path("code").asInt()).isEqualTo(405);
+    }
+
+    @Test
+    void OpenAPI文档默认关闭() throws Exception {
+        assertThat(mvc.perform(get("/v3/api-docs"))
+                .andReturn().getResponse().getStatus()).isEqualTo(404);
+    }
+
+    @Test
     void 不存在的路由返回404而不是500() throws Exception {
         MvcResult result = mvc.perform(get("/api/v1/definitely-not-a-route")).andReturn();
         assertThat(result.getResponse().getStatus()).isEqualTo(404);

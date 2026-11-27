@@ -1,0 +1,6 @@
+# 本地开发：打开 Swagger/OpenAPI（仅 dev profile）
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

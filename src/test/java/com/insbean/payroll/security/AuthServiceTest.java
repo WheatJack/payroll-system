@@ -6,6 +6,7 @@ import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,6 +18,28 @@ class AuthServiceTest extends AbstractDbTest {
 
     @Autowired
     private TokenService tokenService;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Test
+    void 连续失败登录触发429并写审计() {
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login("ghost", "WrongPassw0rd!"))
+                    .isInstanceOf(BizException.class)
+                    .extracting("code").isEqualTo(401);
+        }
+        // 达到阈值后，即使密码正确也被限流挡住
+        assertThatThrownBy(() -> authService.login("ghost", "WrongPassw0rd!"))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(429);
+
+        Integer audits = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_audit_log
+                 WHERE field_name = 'login_blocked' AND biz_type = 'USER'
+                """, Integer.class);
+        assertThat(audits).isPositive();
+    }
 
     @Test
     void 登录成功返回token与权限点() {

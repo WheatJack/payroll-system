@@ -3,6 +3,7 @@ package com.insbean.payroll.period;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
 import com.insbean.payroll.period.dto.PeriodDTO;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,6 +37,55 @@ class PeriodServiceTest extends AbstractDbTest {
         periodId = periodService.create(new PeriodCreateReq(null, "2026-11"), TestDb.COMPANY_DEFAULT).id();
         // 模拟"已生成"：期间推进到 EDITING，编制人 = COMPILER
         jdbc.update("UPDATE pay_period SET status = 'EDITING', compiled_by = ? WHERE id = ?", COMPILER, periodId);
+    }
+
+    @Test
+    void 部门级账号不能创建期间() {
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:record:edit"), "DEPT_SUB", null));
+
+        assertThatThrownBy(() -> periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void 并发锁定恰好一个成功() throws Exception {
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var barrier = new java.util.concurrent.CyclicBarrier(2);
+            var first = pool.submit(() -> lockAs(barrier, 2L));
+            var second = pool.submit(() -> lockAs(barrier, 3L));
+
+            List<Integer> results = List.of(
+                    first.get(60, java.util.concurrent.TimeUnit.SECONDS),
+                    second.get(60, java.util.concurrent.TimeUnit.SECONDS));
+
+            assertThat(results).containsExactlyInAnyOrder(0, 409);
+            // 只有成功的那次写审计，第二次在行锁后看到已锁定直接 409
+            assertThat(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM pay_audit_log
+                     WHERE biz_type = 'PERIOD' AND action = 'LOCK' AND biz_id = ?
+                    """, Integer.class, periodId)).isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private Integer lockAs(java.util.concurrent.CyclicBarrier barrier, long userId) throws Exception {
+        CurrentUser.set(new CurrentUser(userId, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:record:view", "payroll:period:lock"), "ALL", null));
+        try {
+            barrier.await(30, java.util.concurrent.TimeUnit.SECONDS);
+            periodService.lock(periodId, userId);
+            return 0;
+        } catch (BizException e) {
+            return e.getCode();
+        } finally {
+            CurrentUser.clear();
+        }
     }
 
     @Test

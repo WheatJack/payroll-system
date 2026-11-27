@@ -10,6 +10,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -74,6 +76,24 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleNotFound(Exception e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(Result.fail(404, "接口不存在"));
+    }
+
+    /** 方法不被支持必须是 405，不是 500（客户端打错方法不是服务端故障）。 */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Result<Void>> handleMethodNotAllowed(HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(Result.fail(405, "请求方法不被支持"));
+    }
+
+    /**
+     * 连接池拿不到连接是"服务暂不可用"（503），不是 500：
+     * 配合 3s 连接超时快速失败，避免 DB 故障拖垮整站线程。
+     */
+    @ExceptionHandler(CannotGetJdbcConnectionException.class)
+    public ResponseEntity<Result<Void>> handleDbUnavailable(CannotGetJdbcConnectionException e) {
+        log.error("数据库连接不可用", e);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Result.fail(503, "数据库繁忙，请稍后重试"));
     }
 
     /**

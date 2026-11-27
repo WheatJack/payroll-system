@@ -6,6 +6,7 @@ import com.insbean.payroll.employee.dto.EmployeeDTO;
 import com.insbean.payroll.employee.dto.EmployeeQuery;
 import com.insbean.payroll.employee.dto.EmployeePageDTO;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.time.LocalDate;
 import java.time.Period;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -238,6 +240,41 @@ class EmployeeServiceTest extends AbstractDbTest {
         assertThat(page.records()).hasSize(210);
         assertThat(page.size()).isEqualTo(500);
         assertThat(new EmployeeQuery(1, 501, null, null, null, null).pageSize()).isEqualTo(500);
+    }
+
+    @Test
+    void 离职日期早于入职日期返回400() {
+        assertThatThrownBy(() -> service.create(new EmployeeSaveReq(
+                null, "E010", "李四", 1, "ID_CARD", "110101199001018888", null,
+                "REGULAR", "P6", "工程师", TestDb.DEPT_DEFAULT,
+                LocalDate.of(2025, 1, 1), null, LocalDate.of(2024, 1, 1), 2, null),
+                TestDb.COMPANY_DEFAULT))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("离职日期")
+                .extracting("code").isEqualTo(400);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employee WHERE emp_no = 'E010'", Integer.class)).isZero();
+    }
+
+    @Test
+    void 跨部门建人返回403且不落库() {
+        jdbc.update("""
+                INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status)
+                VALUES (20, 1, 0, 'D020', '财务部', '', 20, 1)
+                """);
+        // hr01 属于部门 1：DEPT_SUB 只能操作部门 1 及其下级
+        CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
+                Set.of("payroll:record:edit"), "DEPT_SUB", null));
+
+        assertThatThrownBy(() -> service.create(new EmployeeSaveReq(
+                null, "E009", "张三", 1, "ID_CARD", "110101199001019999", null,
+                "REGULAR", "P6", "工程师", 20L,
+                LocalDate.of(2020, 3, 1), null, null, 1, null), TestDb.COMPANY_DEFAULT))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        // 最坏情况是"返回 403 但数据已写入"：必须确认没有落库
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employee WHERE emp_no = 'E009'", Integer.class)).isZero();
     }
 
     private EmployeeSaveReq createReq(String empNo, String idNo) {

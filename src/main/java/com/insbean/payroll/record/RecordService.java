@@ -54,6 +54,9 @@ public class RecordService {
     /** DECIMAL(18,4) 可表示的最大绝对值。 */
     private static final BigDecimal MAX_DECIMAL_18_4 = new BigDecimal("99999999999999.9999");
 
+    /** 单个工资项的业务上限（防呆，不是防溢出）：超过基本可以断定是录入错误。 */
+    private static final BigDecimal MAX_BUSINESS_AMOUNT = new BigDecimal("1000000.00");
+
     private final PeriodService periodService;
     private final ItemService itemService;
     private final PayRecordMapper recordMapper;
@@ -220,6 +223,9 @@ public class RecordService {
                         RoundingMode.HALF_UP);
         if (amount.signum() < 0) {
             throw new BizException(400, "明细金额不能为负数，扣款请使用减项科目：" + item.itemCode());
+        }
+        if (amount.abs().compareTo(MAX_BUSINESS_AMOUNT) > 0) {
+            throw new BizException(400, "金额超出合理范围（单项上限 1,000,000.00）：" + item.itemCode());
         }
         // DECIMAL(18,4) 上限 99999999999999.9999；超范围必须在服务层拦，否则落库报 500
         if (amount.abs().compareTo(MAX_DECIMAL_18_4) > 0) {
