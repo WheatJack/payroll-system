@@ -46,6 +46,7 @@ export const DEMO_USER: CurrentUser = {
     'payroll:period:unlock',
     'payroll:import:submit',
     'payroll:export',
+    'payroll:sensitive:view',
     'sys:user:view',
     'sys:user:edit',
     'sys:role:view',
@@ -157,6 +158,13 @@ export const EMPLOYEES: Employee[] = [
 ]
 
 /** 明文证件号只存在于 mock 内部，用于演示 409 查重；接口永远只回掩码。 */
+/** 明文手机号（mock 内部用，接口只回掩码或按权限回明文） */
+export const EMPLOYEE_MOBILES: Record<string, string> = {
+  '1': '13800008000',
+  '2': '13900009000',
+  '3': '13700001000',
+}
+
 export const EMPLOYEE_ID_NOS: Record<string, string> = {
   '1': '110101199001011234',
   '2': '310101199505055678',
@@ -272,6 +280,7 @@ export const PERMISSIONS: PermissionItem[] = [
   { code: 'payroll:period:unlock', name: '解锁期间（高危）', module: 'PAYROLL' },
   { code: 'payroll:import:submit', name: '导入提交', module: 'PAYROLL' },
   { code: 'payroll:export', name: '导出（高危）', module: 'PAYROLL' },
+  { code: 'payroll:sensitive:view', name: '查看完整证件号/手机号（高危）', module: 'PAYROLL' },
   { code: 'sys:user:view', name: '查看用户', module: 'SYS' },
   { code: 'sys:user:edit', name: '维护用户', module: 'SYS' },
   { code: 'sys:role:view', name: '查看角色', module: 'SYS' },

@@ -3,6 +3,7 @@ import type {
   Employee,
   EmployeeCreateRequest,
   EmployeePage,
+  EmployeeSensitive,
   EmployeeType,
   EmployeeUpdateRequest,
 } from './models'
@@ -34,4 +35,12 @@ export function createEmployee(payload: EmployeeCreateRequest): Promise<Employee
 /** 只提交需要修改的字段；idNo 不修改时不要带上。 */
 export function updateEmployee(id: string, payload: EmployeeUpdateRequest): Promise<Employee> {
   return api.put<Employee>(`/employees/${id}`, payload)
+}
+
+/**
+ * 证件号/手机号明文（高危，需要 payroll:sensitive:view）。
+ * 每次调用都会写审计日志；调用前必须二次确认，明文只放在组件局部状态里。
+ */
+export function getEmployeeSensitive(id: string): Promise<EmployeeSensitive> {
+  return api.get<EmployeeSensitive>(`/employees/${id}/sensitive`)
 }

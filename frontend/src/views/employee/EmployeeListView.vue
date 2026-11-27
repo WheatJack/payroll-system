@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Plus, Search, UploadFilled, View } from '@element-plus/icons-vue'
 import * as employeeApi from '@/api/employee'
+import { ElMessageBox } from 'element-plus'
 import { listDepts } from '@/api/org'
 import { isApiError } from '@/api/client'
 import { createLatestOnly } from '@/utils/latest'
-import type { Employee, EmployeeType } from '@/api/models'
+import type { Employee, EmployeeSensitive, EmployeeType } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, type DeptNode } from '@/utils/labels'
 import { employeeDeptLabel, employeeSeniority, SENIORITY_TOOLTIP } from '@/utils/employee'
 import EmployeeFormDialog from './EmployeeFormDialog.vue'
 import CompProfilePanel from './CompProfilePanel.vue'
+import EmployeeImportDialog from './EmployeeImportDialog.vue'
 
 const auth = useAuthStore()
 const canEdit = computed(() => auth.has('payroll:record:edit'))
+const canImport = computed(() => auth.has('payroll:import:submit'))
+/** 证件号明文属于高危：没有 payroll:sensitive:view 连眼睛图标都不显示 */
+const canViewSensitive = computed(() => auth.has('payroll:sensitive:view'))
 
 const filters = reactive({
   keyword: '',
@@ -40,6 +45,43 @@ const editing = ref<Employee | null>(null)
 
 const drawerVisible = ref(false)
 const drawerEmployee = ref<Employee | null>(null)
+
+const importVisible = ref(false)
+
+/* ------------------------- 证件号/手机号明文 ------------------------- */
+/** 明文只放组件局部状态，不写 store；弹窗关闭即清空 */
+const sensitiveVisible = ref(false)
+const sensitiveLoading = ref(false)
+const sensitiveTarget = ref<Employee | null>(null)
+const sensitiveData = ref<EmployeeSensitive | null>(null)
+
+async function openSensitive(row: Employee): Promise<void> {
+  if (!canViewSensitive.value) return
+  try {
+    await ElMessageBox.confirm('查看完整证件号会记录审计日志，确认查看？', '查看敏感信息', {
+      confirmButtonText: '确认查看',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  sensitiveLoading.value = true
+  try {
+    sensitiveData.value = await employeeApi.getEmployeeSensitive(row.id)
+    sensitiveTarget.value = row
+    sensitiveVisible.value = true
+  } catch (error) {
+    ElMessage.error(isApiError(error) ? error.message : '敏感信息获取失败')
+  } finally {
+    sensitiveLoading.value = false
+  }
+}
+
+function clearSensitive(): void {
+  sensitiveData.value = null
+  sensitiveTarget.value = null
+}
 
 const query = computed<employeeApi.EmployeeQuery>(() => {
   const result: employeeApi.EmployeeQuery = { current: current.value, size: size.value }
@@ -159,6 +201,7 @@ onMounted(() => {
         <el-button @click="reset">重置</el-button>
       </div>
       <div class="toolbar-actions">
+        <el-button v-if="canImport" :icon="UploadFilled" @click="importVisible = true">批量导入</el-button>
         <el-button v-if="canEdit" type="primary" :icon="Plus" @click="openCreate">新增人员</el-button>
       </div>
     </div>
@@ -190,9 +233,19 @@ onMounted(() => {
           <span class="amount-cell">{{ employeeSeniority(row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="idNoMask" label="证件号" width="130">
+      <el-table-column prop="idNoMask" label="证件号" width="160">
         <template #default="{ row }">
           <span class="masked">{{ row.idNoMask }}</span>
+          <el-button
+            v-if="canViewSensitive"
+            link
+            type="primary"
+            class="sensitive-eye"
+            :icon="View"
+            :loading="sensitiveLoading"
+            title="查看完整证件号（会记入审计）"
+            @click="openSensitive(row)"
+          />
         </template>
       </el-table-column>
       <el-table-column prop="mobileMask" label="手机号" width="130">
@@ -232,6 +285,21 @@ onMounted(() => {
 
     <EmployeeFormDialog v-model="dialogVisible" :employee="editing" @saved="onSaved" />
 
+    <EmployeeImportDialog v-model="importVisible" @imported="load" />
+
+    <el-dialog v-model="sensitiveVisible" title="证件号与手机号" width="460px" @closed="clearSensitive">
+      <el-alert title="本次查看已记入审计日志" type="warning" show-icon :closable="false" class="form-error" />
+      <el-descriptions v-if="sensitiveData" :column="1" border>
+        <el-descriptions-item label="姓名">{{ sensitiveTarget?.name ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="工号">{{ sensitiveTarget?.empNo ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="证件号">{{ sensitiveData.idNo }}</el-descriptions-item>
+        <el-descriptions-item label="手机号">{{ sensitiveData.mobile || '—' }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="sensitiveVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <el-drawer v-model="drawerVisible" :title="`薪酬档案 · ${drawerEmployee?.name ?? ''}`" size="680px" destroy-on-close>
       <CompProfilePanel
         v-if="drawerEmployee"
@@ -243,8 +311,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.list-error {
+.list-error,
+.form-error {
   margin-bottom: 12px;
+}
+.sensitive-eye {
+  margin-left: 4px;
 }
 .masked {
   font-variant-numeric: tabular-nums;

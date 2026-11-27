@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * 人员详情
-         * @description 证件号/手机号只返回掩码，不提供明文出口。
+         * @description 证件号/手机号只返回掩码；明文经 `GET /employees/{id}/sensitive` 单独获取。
          */
         get: operations["getEmployee"];
         /**
@@ -136,6 +136,27 @@ export interface paths {
          * @description 只提交需要修改的字段。`idNo` 不修改时可省略。
          */
         put: operations["updateEmployee"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employees/{id}/sensitive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查看证件号与手机号明文
+         * @description 需要 `payroll:sensitive:view`（高危）。返回证件号与手机号明文，前端必须二次确认。
+         *     **每次调用都写审计日志**（记录操作人、员工 ID、时间与来源），审计内容不含明文。
+         */
+        get: operations["getEmployeeSensitive"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -499,6 +520,71 @@ export interface paths {
         get: operations["downloadImportErrors"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/employee-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 下载人员导入模板
+         * @description 需要 `payroll:import:submit`。返回二进制 xlsx，不使用统一响应包。
+         *     模板列固定为：工号 | 姓名 | 性别 | 员工类型 | 证件类型 | 证件号码 | 手机号 |
+         *     部门编码 | 职级 | 岗位 | 入职日期 | 参加工作时间 | 基本工资。
+         */
+        get: operations["downloadEmployeeImportTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/employees/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 人员导入预校验
+         * @description 需要 `payroll:import:submit`。**不写入人员主数据**；持久化批次、错误行与
+         *     原始文件，提交时按批次重放并重新校验。响应结构与变动工资导入预校验一致
+         *     （`batchId` / `totalRows` / `successRows` / `failRows` / `errors`）。
+         */
+        post: operations["validateEmployeeImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/employees/{batchId}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 提交人员导入
+         * @description 需要 `payroll:import:submit`。事务内 upsert 人员主数据；
+         *     **`failRows > 0` 时禁止提交**，返回 409 且 `data.failRows` 为失败行数。
+         */
+        post: operations["commitEmployeeImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -896,13 +982,14 @@ export interface components {
          *     - 核算：`payroll:record:view`、`payroll:record:edit`
          *     - 期间：`payroll:period:lock`、`payroll:period:unlock`
          *     - 导入导出：`payroll:import:submit`、`payroll:export`
+         *     - 敏感字段：`payroll:sensitive:view`（高危，每次查看写审计）
          *     - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
          *       `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
          *       `sys:config:view`、`sys:config:edit`
          * @example sys:user:view
          * @enum {string}
          */
-        PermissionCode: "payroll:record:view" | "payroll:record:edit" | "payroll:period:lock" | "payroll:period:unlock" | "payroll:import:submit" | "payroll:export" | "sys:user:view" | "sys:user:edit" | "sys:role:view" | "sys:role:edit" | "sys:role:grant:all" | "sys:dept:edit" | "sys:company:edit" | "sys:config:view" | "sys:config:edit";
+        PermissionCode: "payroll:record:view" | "payroll:record:edit" | "payroll:period:lock" | "payroll:period:unlock" | "payroll:import:submit" | "payroll:export" | "payroll:sensitive:view" | "sys:user:view" | "sys:user:edit" | "sys:role:view" | "sys:role:edit" | "sys:role:grant:all" | "sys:dept:edit" | "sys:company:edit" | "sys:config:view" | "sys:config:edit";
         /**
          * Format: int32
          * @description 业务状态码。0=成功；400=参数校验失败；401=未认证；403=无权限；
@@ -1100,6 +1187,11 @@ export interface components {
              */
             status: 1 | 2 | 3;
             remark?: string | null;
+        };
+        /** @description 证件号与手机号明文；仅 `payroll:sensitive:view` 可获取，每次调用写审计。 */
+        EmployeeSensitive: {
+            idNo: string;
+            mobile: string | null;
         };
         EmployeeCreateRequest: {
             /** @description 缺省取当前用户所属主体 */
@@ -1784,6 +1876,12 @@ export interface components {
             msg: string;
             data: components["schemas"]["Employee"];
         };
+        ResultEmployeeSensitive: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["EmployeeSensitive"];
+        };
         ResultCompProfileList: {
             code: components["schemas"]["ErrorCode"];
             /** @example ok */
@@ -2336,6 +2434,33 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEmployeeSensitive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 证件号与手机号明文 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultEmployeeSensitive"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2905,6 +3030,102 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    downloadEmployeeImportTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description xlsx 人员导入模板 */
+            200: {
+                headers: {
+                    /** @description 附件文件名 */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    validateEmployeeImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description xlsx 文件，≤ 50MB、≤ 5 万行
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 预校验结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportValidate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    commitEmployeeImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 导入批次 ID（字符串形式的 Long） */
+                batchId: components["parameters"]["BatchIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 提交结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportCommit"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description 预校验存在失败行（`data.failRows` 给出数量）或文件已提交 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportCommitConflict"];
+                };
+            };
             500: components["responses"]["InternalError"];
         };
     };

@@ -100,3 +100,6 @@ export type MonthlyReportResult = S['MonthlyReportResult']
 export type AnnualReportResult = S['AnnualReportResult']
 export type ConfigItem = S['ConfigItem']
 export type ConfigValueType = S['ConfigValueType']
+
+// v1.3：人员敏感字段 / 人员批量导入
+export type EmployeeSensitive = S['EmployeeSensitive']

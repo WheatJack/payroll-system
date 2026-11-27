@@ -40,6 +40,7 @@ import {
   DEPTS,
   EMPLOYEES,
   EMPLOYEE_ID_NOS,
+  EMPLOYEE_MOBILES,
   GRID_EXAMPLE,
   MONTHLY_REPORT_ROWS,
   PAY_ITEMS,
@@ -253,6 +254,20 @@ export const handlers = [
     const start = (current - 1) * size
     const page: EmployeePage = { records: list.slice(start, start + size), total, current, size }
     return ok(page)
+  }),
+
+  http.get(`${API}/employees/:id/sensitive`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:sensitive:view')) return fail(403, '无权限执行该操作')
+    const employee = state.employees.find((item) => item.id === params.id)
+    if (!employee) return fail(400, '人员不存在')
+    // 每次查看都写审计（mock 只打日志）
+    console.info('[mock] 敏感信息查看审计', { operator: currentUserOf(request)?.userId, employeeId: employee.id })
+    return ok({
+      idNo: state.idNos[employee.id] ?? '—',
+      mobile: EMPLOYEE_MOBILES[employee.id] ?? null,
+    })
   }),
 
   http.post(`${API}/employees`, async ({ request }) => {
@@ -640,6 +655,73 @@ export const handlers = [
   }),
 
   /* ------------------------------ 导入 ------------------------------ */
+
+  http.get(`${API}/import/employee-template`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
+    return new HttpResponse(new Blob(['PK\u0003\u0004 mock employee template'], { type: XLSX_MIME }), {
+      status: 200,
+      headers: {
+        'Content-Type': XLSX_MIME,
+        'Content-Disposition': 'attachment; filename="employee-import-template.xlsx"',
+      },
+    })
+  }),
+
+  http.post(`${API}/import/employees/validate`, async ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
+    const form = await request.formData()
+    const file = form.get('file')
+    if (!(file instanceof File)) return fail(400, 'file 必填')
+    if (importState.committedFileNames.has(file.name)) return fail(409, '同一文件已提交过，请勿重复导入')
+
+    const batchId = `E${importState.nextId++}`
+    const errors: ImportError[] = /err|bad/i.test(file.name)
+      ? [
+          { rowNo: 2, columnName: '证件号', rawValue: 'abc', errorCode: 'INVALID_ID_NO', errorMsg: '证件号格式不正确' },
+          { rowNo: 4, columnName: '部门编码', rawValue: 'NOPE', errorCode: 'DEPT_NOT_FOUND', errorMsg: '部门编码不存在' },
+        ]
+      : []
+    const result: ImportValidateResult = {
+      batchId,
+      totalRows: 8,
+      successRows: 8 - errors.length,
+      failRows: errors.length,
+      status: 'VALIDATED',
+      errors,
+    }
+    importState.batches.set(batchId, { result, fileName: file.name, committed: false })
+    return ok(result)
+  }),
+
+  http.post(`${API}/import/employees/:batchId/commit`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
+    const entry = importState.batches.get(String(params.batchId))
+    if (!entry) return fail(400, '批次不存在')
+    if (entry.committed) return fail(409, '该批次已提交，不能重复提交')
+    if (entry.result.status === 'VALIDATING') return fail(409, '预校验进行中，请稍候再提交')
+    if (entry.result.failRows > 0) {
+      return fail(409, `预校验存在 ${entry.result.failRows} 行失败，禁止提交`, {
+        batchId: entry.result.batchId,
+        failRows: entry.result.failRows,
+      })
+    }
+    entry.committed = true
+    entry.result = { ...entry.result, status: 'COMMITTED' }
+    importState.committedFileNames.add(entry.fileName)
+    const result: ImportCommitResult = {
+      batchId: entry.result.batchId,
+      status: 'COMMITTED',
+      successRows: entry.result.successRows,
+      failRows: 0,
+    }
+    return ok(result)
+  }),
 
   http.get(`${API}/import/template`, ({ request }) => {
     const denied = requireAuth(request)

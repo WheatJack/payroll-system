@@ -50,3 +50,27 @@ export function commitImport(batchId: string): Promise<ImportCommitResult> {
 export function downloadImportErrors(batchId: string, fallbackFilename = 'import-errors.xlsx'): Promise<DownloadedFile> {
   return downloadFile({ url: `/import/${batchId}/errors`, method: 'GET' }, fallbackFilename)
 }
+
+/* ---------------------------- 人员批量导入 ---------------------------- */
+
+/** 人员导入模板（13 列固定、列名不可改）。 */
+export function downloadEmployeeImportTemplate(
+  fallbackFilename = 'employee-import-template.xlsx',
+): Promise<DownloadedFile> {
+  return downloadFile({ url: '/import/employee-template', method: 'GET' }, fallbackFilename)
+}
+
+/** 上传并预校验人员；响应结构与工资数据导入一致。 */
+export function validateEmployeeImport(file: File): Promise<ImportValidateResult> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  // axios 在 JSON Content-Type 下会把 FormData 序列化成 JSON，必须置 null 删除该头
+  return api.post<ImportValidateResult>('/import/employees/validate', form, {
+    headers: { 'Content-Type': null },
+  })
+}
+
+/** 提交人员导入；failRows > 0 时后端返回 409 且 data.failRows 给出数量。 */
+export function commitEmployeeImport(batchId: string): Promise<ImportCommitResult> {
+  return api.post<ImportCommitResult>(`/import/employees/${batchId}/commit`)
+}
