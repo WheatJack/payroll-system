@@ -3,10 +3,11 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useLogout } from '@/composables/useLogout'
 
 const auth = useAuthStore()
 const route = useRoute()
-const router = useRouter()
+const { logout: performLogout } = useLogout()
 
 interface MenuEntry {
   path: string
@@ -53,8 +54,8 @@ async function logout() {
   } catch {
     return
   }
-  auth.logout()
-  await router.replace({ name: 'login' })
+  // 清 token + 跳转登录页（统一走 useLogout，避免只清不清导航）
+  await performLogout()
 }
 </script>
 

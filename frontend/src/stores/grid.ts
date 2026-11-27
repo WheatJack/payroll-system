@@ -155,7 +155,9 @@ export const useGridStore = defineStore('grid', () => {
       if (current.jobLevel && row.jobLevel !== current.jobLevel) return false
       if (current.keyword) {
         const keyword = current.keyword.trim().toLowerCase()
-        if (!row.empNo.toLowerCase().includes(keyword) && !row.empName.toLowerCase().includes(keyword)) {
+        const empNo = String(row.empNo ?? '').toLowerCase()
+        const empName = String(row.empName ?? '').toLowerCase()
+        if (!empNo.includes(keyword) && !empName.includes(keyword)) {
           return false
         }
       }

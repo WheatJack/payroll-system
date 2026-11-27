@@ -241,11 +241,11 @@ onMounted(() => {
       </el-table-column>
       <el-table-column label="权限点" min-width="260">
         <template #default="{ row }">
-          <el-tag v-for="permission in row.permissions.slice(0, 4)" :key="permission" size="small" type="info" class="perm-tag">
+          <el-tag v-for="permission in (row.permissions ?? []).slice(0, 4)" :key="permission" size="small" type="info" class="perm-tag">
             {{ permission }}
           </el-tag>
-          <el-tag v-if="row.permissions.length > 4" size="small" type="info">+{{ row.permissions.length - 4 }}</el-tag>
-          <span v-if="row.permissions.length === 0" class="muted">未授权</span>
+          <el-tag v-if="(row.permissions ?? []).length > 4" size="small" type="info">+{{ (row.permissions ?? []).length - 4 }}</el-tag>
+          <span v-if="(row.permissions ?? []).length === 0" class="muted">未授权</span>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90">

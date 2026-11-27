@@ -8,10 +8,12 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useLogout } from '@/composables/useLogout'
 import { resolveLandingPath } from '@/utils/landing'
 
 const router = useRouter()
 const auth = useAuthStore()
+const { logout: performLogout } = useLogout()
 const refreshing = ref(false)
 
 const permissionCount = computed(() => auth.permissions.length)
@@ -36,8 +38,7 @@ async function refresh() {
 }
 
 function logout() {
-  auth.logout()
-  void router.replace({ name: 'login' })
+  void performLogout()
 }
 </script>
 

@@ -78,6 +78,16 @@ describe('money 的精度边界：乘除、负数、HALF_UP 与 scale ≠ 2', ()
     expect(eq('1.234', '1.235')).toBe(false)
   })
 
+  test('展示层容忍后端把金额/数值返回成数字（类型漂移不白屏）', () => {
+    expect(formatOrZero(6)).toBe('6.00')
+    expect(formatOrZero(1234.5)).toBe('1,234.50')
+    expect(formatOrZero(Number.NaN)).toBe('0.00')
+    expect(formatOrZero({})).toBe('0.00')
+    expect(coerce(6)).toBe('6.00')
+    expect(coerce(Number.POSITIVE_INFINITY)).toBeNull()
+    expect(coerce({})).toBeNull()
+  })
+
   test('formatOrZero 对空值/非法金额兜底为 0.00，不抛错', () => {
     expect(formatOrZero('')).toBe('0.00')
     expect(formatOrZero(null)).toBe('0.00')

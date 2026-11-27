@@ -2,10 +2,12 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useLogout } from '@/composables/useLogout'
 import { resolveLandingPath } from '@/utils/landing'
 
 const router = useRouter()
 const auth = useAuthStore()
+const { logout: performLogout } = useLogout()
 const landing = computed(() => resolveLandingPath(auth.permissions))
 
 function goHome() {
@@ -13,8 +15,7 @@ function goHome() {
 }
 
 function logout() {
-  auth.logout()
-  void router.replace({ name: 'login' })
+  void performLogout()
 }
 </script>
 

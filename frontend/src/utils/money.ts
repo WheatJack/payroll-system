@@ -120,13 +120,32 @@ export function format(value: string): string {
 export const ZERO: Money = '0.00'
 
 /**
- * 展示兜底：空值/非法金额一律显示 0.00。
+ * 把接口/表单里的未知类型值规整成金额字符串。
+ *
+ * 契约要求金额是字符串，但后端偶尔会漏一个数字（例如 `seniorityYears: 6`）；
+ * 前端不能因为一个字段类型不对就白屏——有限数字按两位小数展示，其余一律 null。
+ * 注意：这里只做**展示层适配**，不参与任何金额运算。
+ */
+export function asMoneyString(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed === '' ? null : trimmed
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value.toFixed(2)
+  }
+  return null
+}
+
+/**
+ * 展示兜底：空值/非法金额/数字类型一律安全展示。
  * 单元格渲染用它，避免一个坏字段让整张表抛错白屏（与合计行容错保持一致）。
  */
-export function formatOrZero(value: string | null | undefined): string {
-  if (value === null || value === undefined || value.trim() === '') return ZERO
+export function formatOrZero(value: unknown): string {
+  const normalized = asMoneyString(value)
+  if (normalized === null) return ZERO
   try {
-    return format(value)
+    return format(normalized)
   } catch {
     return ZERO
   }
@@ -134,11 +153,14 @@ export function formatOrZero(value: string | null | undefined): string {
 
 /**
  * 清洗用户输入或 Excel 粘贴的金额文本（剔除货币符号、千分位、空白），
- * 合法则返回金额字符串，非法返回 null。仅做字符串清洗，不做数值转换。
+ * 合法则返回金额字符串，非法返回 null。
+ *
+ * 字符串只做清洗；有限数字（后端类型漂移）按两位小数兜底；其余返回 null。
  */
-export function coerce(value: string): string | null {
-  if (typeof value !== 'string') return null
-  const cleaned = value.replace(/[,\s￥¥$]/g, '').replace(/^\+/, '')
+export function coerce(value: unknown): string | null {
+  const normalized = asMoneyString(value)
+  if (normalized === null) return null
+  const cleaned = normalized.replace(/[,\s￥¥$]/g, '').replace(/^\+/, '')
   if (cleaned === '') return null
   return MONEY_PATTERN.test(cleaned) ? cleaned : null
 }

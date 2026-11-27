@@ -14,7 +14,7 @@ import { listPayItems } from '@/api/item'
 import { isApiError } from '@/api/client'
 import type { CompProfile, PayItem } from '@/api/models'
 import MoneyInput from '@/components/MoneyInput.vue'
-import { compare, formatOrZero, round } from '@/utils/money'
+import { coerce, compare, formatOrZero, round } from '@/utils/money'
 
 const props = defineProps<{
   employeeId: string
@@ -93,9 +93,11 @@ function nextMonthFirstDay(): string {
 function openAdjust() {
   const current = currentProfile.value
   effectiveFrom.value = nextMonthFirstDay()
-  baseSalary.value = current ? round(current.baseSalary, 2) : '0.00'
+  baseSalary.value = current ? round(coerce(current.baseSalary) ?? '0.00', 2) : '0.00'
   changeReason.value = ''
-  itemRows.value = current ? current.items.map((item) => ({ ...item })) : []
+  itemRows.value = current
+    ? current.items.map((item) => ({ itemCode: item.itemCode, amount: round(coerce(item.amount) ?? '0.00', 2) }))
+    : []
   formError.value = ''
   dialogVisible.value = true
 }

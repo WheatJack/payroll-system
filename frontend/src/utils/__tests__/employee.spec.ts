@@ -39,6 +39,13 @@ describe('人员工龄与部门展示', () => {
     expect(employeeSeniority(employee({ seniorityYears: null }))).toBe('—')
   })
 
+  test('后端把工龄返回成数字时按两位小数展示（6 -> 6.00）', () => {
+    expect(employeeSeniority(employee({ seniorityYears: 6 }))).toBe('6.00')
+    expect(employeeSocialSeniority(employee({ socialSeniorityYears: 7.5 }))).toBe('7.50')
+    expect(employeeSeniority(employee({ seniorityYears: {} }))).toBe('—')
+    expect(employeeSeniority(employee({ seniorityYears: Number.NaN }))).toBe('—')
+  })
+
   test('部门优先 deptName，缺失才退回 deptId', () => {
     expect(employeeDeptLabel(employee())).toBe('北京研发部')
     expect(employeeDeptLabel(employee({ deptName: '' }))).toBe('1')

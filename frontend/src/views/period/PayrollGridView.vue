@@ -526,11 +526,12 @@ onBeforeUnmount(() => {
           :align="meta.align ?? 'left'"
           :fixed="meta.fixed"
         >
-          <template v-if="meta.field === 'employeeType'" #default="{ row }">
-            {{ employeeTypeLabel(row.employeeType) }}
+          <!-- 不用解构参数：vxe 在部分渲染路径（如 jsdom/无行上下文）会以 undefined 调用插槽 -->
+          <template v-if="meta.field === 'employeeType'" #default="scope">
+            {{ employeeTypeLabel(scope?.row?.employeeType) }}
           </template>
-          <template v-else-if="meta.field === 'seniorityYears'" #default="{ row }">
-            <span class="amount-cell">{{ row.seniorityYears }}</span>
+          <template v-else-if="meta.field === 'seniorityYears'" #default="scope">
+            <span class="amount-cell">{{ scope?.row?.seniorityYears ?? '—' }}</span>
           </template>
         </vxe-column>
 
@@ -543,18 +544,23 @@ onBeforeUnmount(() => {
           align="right"
           :edit-render="editable && column.editable ? {} : undefined"
         >
-          <template #default="{ row }">
-            <span class="grid-amount" :class="{ 'is-dirty': store.isDirty(row.recordId, column.itemCode) }">
-              {{ formatOrZero(cellValue(row, column.itemCode)) }}
+          <template #default="scope">
+            <span
+              v-if="scope?.row"
+              class="grid-amount"
+              :class="{ 'is-dirty': store.isDirty(scope.row.recordId, column.itemCode) }"
+            >
+              {{ formatOrZero(cellValue(scope.row, column.itemCode)) }}
             </span>
           </template>
-          <template v-if="editable && column.editable" #edit="{ row }">
+          <template v-if="editable && column.editable" #edit="scope">
             <MoneyInput
-              :model-value="cellValue(row, column.itemCode)"
+              v-if="scope?.row"
+              :model-value="cellValue(scope.row, column.itemCode)"
               :scale="column.scale"
               :aria-label="column.itemName"
-              @update:model-value="(value: string) => onCellUpdate(row, column, value)"
-              @change="() => onEditCommitted(row, column)"
+              @update:model-value="(value: string) => onCellUpdate(scope.row, column, value)"
+              @change="() => onEditCommitted(scope.row, column)"
             />
           </template>
         </vxe-column>

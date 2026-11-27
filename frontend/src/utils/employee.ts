@@ -2,13 +2,15 @@
  * 人员展示辅助。
  *
  * `seniorityYears` 在契约里是 required、`socialSeniorityYears` 可空；
- * 但后端 `GET /employees` 目前还没返回这两个字段，真实联调时会短暂拿到 undefined，
- * 因此这里保留**运行时**兜底（缺失/空串/null 一律显示 `—`），不做类型层面的假设。
+ * 但**运行时**必须容忍任何类型：后端曾把工龄返回成数字 `6`（契约要求 `"6.00"`），
+ * 一个字段类型漂移不能让整张人员表白屏。统一走 money.asMoneyString 做安全适配。
  */
 import type { Employee } from '@/api/models'
+import { asMoneyString } from './money'
 
-function pickDecimal(value: string | null | undefined): string {
-  return value && value.trim() !== '' ? value : '—'
+/** 工龄/社会工龄：字符串去空白、有限数字按两位小数；其余（null/undefined/对象）显示 — */
+function pickDecimal(value: unknown): string {
+  return asMoneyString(value) ?? '—'
 }
 
 /** 本司工龄（按入职日期计算，只读）。 */

@@ -44,6 +44,11 @@ describe('报表合计', () => {
     expect(sumMoneyColumn([], () => '0.00')).toBe('0.00')
   })
 
+  test('金额列混入数字（后端类型漂移）也能累加', () => {
+    const rows = [{ amount: 6 }, { amount: '4.00' }] as Array<{ amount: string }>
+    expect(sumMoneyColumn(rows, (row) => row.amount)).toBe('10.00')
+  })
+
   test('人数列是整数求和', () => {
     expect(sumCountColumn([{ n: 1 }, { n: 2 }, {}], (row) => row.n)).toBe(3)
   })
