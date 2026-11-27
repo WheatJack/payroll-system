@@ -1486,7 +1486,10 @@ paths:
         - `PAYSLIP`：员工工资条（一批人或一个人），`params.periodYm` 必填，
           `params.employeeIds` 可选（不传时按数据范围导出可见人员）。
           **工资条只含姓名、工号、部门、工资项与合计，不含证件号、手机号、银行卡号**
-          （最小必要原则）。
+          （最小必要原则）；
+        - `ANNUAL_TAX`：年度个税核对表，`params.year` 必填，`params.employeeId` /
+          `params.deptId` 可选；`paidMonths` 以整数写入，金额为 `#,##0.00` 数值格式，
+          税负率为 4 位小数的数值格式。
         缺少对应类型的必填参数一律返回 400。
 
         需要 `payroll:export` 权限；导出成功写审计日志（`pay_audit_log`，
@@ -2333,7 +2336,8 @@ components:
         - `ANNUAL` 年度汇总（按人或按部门）
         - `PERIOD_SHEET` 期间完整工资表（含全部工资项列）
         - `PAYSLIP` 员工工资条（一批人或一个人）
-      enum: [MONTHLY, ANNUAL, PERIOD_SHEET, PAYSLIP]
+        - `ANNUAL_TAX` 年度个税核对（按人列出台账累计、应纳税所得额与实际税负率）
+      enum: [MONTHLY, ANNUAL, PERIOD_SHEET, PAYSLIP, ANNUAL_TAX]
 
     ReportFormat:
       type: string
@@ -3585,7 +3589,8 @@ components:
           主体时 `companyId` 必填（否则会把不同主体的同名部门加总）；
         - `PERIOD_SHEET`：`periodYm` 必填，`deptId` 可选（限定部门）；
         - `PAYSLIP`：`periodYm` 必填，`employeeIds` 可选（一批人或一个人；
-          不传时按当前用户数据范围导出可见人员）。
+          不传时按当前用户数据范围导出可见人员）；
+        - `ANNUAL_TAX`：`year` 必填，`employeeId` / `deptId` 可选。
         缺少对应类型的必填参数返回 400。
         全部报表仅统计 `LOCKED` 与 `ARCHIVED` 期间，并按当前用户的数据范围过滤。
       properties:
@@ -3596,7 +3601,7 @@ components:
         year:
           type: string
           pattern: '^[0-9]{4}$'
-          description: ANNUAL 必填，如 "2026"
+          description: ANNUAL / ANNUAL_TAX 必填，如 "2026"
         groupBy:
           $ref: '#/components/schemas/ReportGroupBy'
         companyId:
@@ -3605,6 +3610,10 @@ components:
             - $ref: '#/components/schemas/Id'
         deptId:
           $ref: '#/components/schemas/Id'
+        employeeId:
+          description: ANNUAL_TAX 可选，限定单个员工
+          allOf:
+            - $ref: '#/components/schemas/Id'
         employeeIds:
           type: array
           description: PAYSLIP 可选；指定则只导出这些人，不传按数据范围导出可见人员
