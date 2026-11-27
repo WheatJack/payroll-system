@@ -200,7 +200,9 @@ public class UserAdminService {
         }
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
-        assertCanManageAccount(entity, CurrentUser.get(), false);
+        // 删除是收敛操作：本来就无角色的账号没有东西需要保护，允许删除；
+        // 重置密码/停用/降级仍按无角色 403（那些是"接管"路径）
+        assertCanManageAccount(entity, CurrentUser.get(), true);
         userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         // 逻辑删除；拦截器 findById 会立即查不到该用户 → 其 token 下一次请求即 401

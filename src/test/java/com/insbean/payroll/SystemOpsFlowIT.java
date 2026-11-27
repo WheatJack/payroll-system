@@ -270,9 +270,12 @@ class SystemOpsFlowIT extends AbstractDbTest {
                         .content("{\"status\":0}"))
                 .andReturn().getResponse().getStatus()).isEqualTo(403);
 
+        // 删除是收敛操作：无角色账号允许删除（建号失败留下的孤儿必须能清理）
         assertThat(mvc.perform(delete("/api/v1/users/" + userId)
                         .header("Authorization", "Bearer " + admin))
-                .andReturn().getResponse().getStatus()).isEqualTo(403);
+                .andReturn().getResponse().getStatus()).isEqualTo(200);
+        assertThat(jdbc.queryForObject(
+                "SELECT deleted FROM sys_user WHERE id = ?", Integer.class, userId)).isEqualTo(1);
     }
 
     /** 通过真实接口创建一个没有角色的账号，返回用户 ID。 */

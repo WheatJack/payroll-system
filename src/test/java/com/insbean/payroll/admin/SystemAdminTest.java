@@ -374,9 +374,10 @@ class SystemAdminTest extends AbstractDbTest {
                 new UserUpdateReq("新名字", null, null, null, null)))
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(403);
-        assertThatThrownBy(() -> userAdminService.delete(9L))
-                .isInstanceOf(BizException.class)
-                .extracting("code").isEqualTo(403);
+        // 删除是收敛操作：无角色账号允许删除（否则建号失败留下的孤儿永远删不掉）
+        userAdminService.delete(9L);
+        assertThat(jdbc.queryForObject(
+                "SELECT deleted FROM sys_user WHERE id = 9", Integer.class)).isEqualTo(1);
     }
 
     @Test
