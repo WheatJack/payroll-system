@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 import java.util.Map;
@@ -59,6 +61,19 @@ public class GlobalExceptionHandler {
             MissingServletRequestParameterException.class})
     public ResponseEntity<Result<Void>> handleBadRequest(Exception e) {
         return ResponseEntity.badRequest().body(Result.fail(400, "请求参数格式不正确"));
+    }
+
+    /**
+     * 不存在的路由必须是 404，不是 500。
+     *
+     * <p>Spring 6.1 对未匹配的静态资源抛 {@link NoResourceFoundException}；
+     * 兜底的 {@code Exception} handler 会把它转成 500，让"客户端打错地址"
+     * 在监控里看起来像服务端故障。
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<Result<Void>> handleNotFound(Exception e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Result.fail(404, "接口不存在"));
     }
 
     /**

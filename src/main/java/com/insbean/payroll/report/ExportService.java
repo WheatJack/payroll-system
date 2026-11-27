@@ -258,7 +258,7 @@ public class ExportService {
             List<PayRecordItemEntity> companyItems = flattenItems(companyRecords, items);
             List<GridColumn> itemColumns = columnsFor(companyId, params.periodYm(), companyItems);
             sheets.add(paySheet(sheetName("工资表", companyId, params.periodYm()),
-                    itemColumns, companyRecords, items));
+                    itemColumns, companyRecords, items, companyId, params.periodYm()));
         });
         return new PeriodData(sheets, records.size(), "");
     }
@@ -306,17 +306,23 @@ public class ExportService {
                 columnsFor(companyId, params.periodYm(), flattenItems(companyRecords, items))
                         .forEach(c -> union.putIfAbsent(c.itemCode(), c)));
 
-        return new PeriodData(List.of(paySheet("工资条-" + params.periodYm(),
+        return new PeriodData(List.of(payslipSheet("工资条-" + params.periodYm(),
                 new ArrayList<>(union.values()), records, items)), records.size(),
                 invalidEmployeeIds > 0 ? ";invalidEmployeeIds=" + invalidEmployeeIds : "");
     }
 
     // ------------------------------------------------------------------ 共用
 
+    /**
+     * 期间工资表：带「法人主体」「期间」列（多主体导出时分得清），末尾追加「合计」行。
+     */
     private ExcelWriter.SheetData paySheet(String name, List<GridColumn> itemColumns,
                                            List<PayRecordEntity> records,
-                                           Map<Long, Map<String, BigDecimal>> itemsByRecord) {
+                                           Map<Long, Map<String, BigDecimal>> itemsByRecord,
+                                           Long companyId, String periodYm) {
         List<ExcelWriter.Column> columns = new ArrayList<>();
+        columns.add(ExcelWriter.Column.text("法人主体"));
+        columns.add(ExcelWriter.Column.text("期间"));
         columns.add(ExcelWriter.Column.text("工号"));
         columns.add(ExcelWriter.Column.text("姓名"));
         columns.add(ExcelWriter.Column.text("部门"));
@@ -325,21 +331,91 @@ public class ExportService {
         columns.add(ExcelWriter.Column.money("扣款合计"));
         columns.add(ExcelWriter.Column.money("实发合计"));
 
-        List<List<Object>> rows = records.stream().map(r -> {
-            Map<String, BigDecimal> items = itemsByRecord
-                    .getOrDefault(r.getId(), Map.of());
+        String companyName = companyName(companyId);
+        BigDecimal[] itemSums = new BigDecimal[itemColumns.size()];
+        java.util.Arrays.fill(itemSums, BigDecimal.ZERO);
+        BigDecimal grossSum = BigDecimal.ZERO;
+        BigDecimal deductionSum = BigDecimal.ZERO;
+        BigDecimal netSum = BigDecimal.ZERO;
+
+        List<List<Object>> rows = new ArrayList<>();
+        for (PayRecordEntity r : records) {
+            Map<String, BigDecimal> items = itemsByRecord.getOrDefault(r.getId(), Map.of());
             List<Object> row = new ArrayList<>();
+            row.add(companyName);
+            row.add(periodYm);
             row.add(r.getEmpNo());
             row.add(r.getEmpName());
             row.add(r.getDeptName());
-            for (GridColumn column : itemColumns) {
-                row.add(items.get(column.itemCode()));
+            for (int i = 0; i < itemColumns.size(); i++) {
+                BigDecimal amount = items.get(itemColumns.get(i).itemCode());
+                row.add(amount);
+                if (amount != null) {
+                    itemSums[i] = itemSums[i].add(amount);
+                }
             }
             row.add(r.getGrossAmount());
             row.add(r.getDeductionAmount());
             row.add(r.getNetAmount());
-            return row;
-        }).toList();
+            grossSum = grossSum.add(nvl(r.getGrossAmount()));
+            deductionSum = deductionSum.add(nvl(r.getDeductionAmount()));
+            netSum = netSum.add(nvl(r.getNetAmount()));
+            rows.add(row);
+        }
+
+        if (!records.isEmpty()) {
+            List<Object> totalRow = new ArrayList<>();
+            totalRow.add("合计");
+            totalRow.add(null);
+            totalRow.add(null);
+            totalRow.add(null);
+            totalRow.add(null);
+            for (BigDecimal sum : itemSums) {
+                totalRow.add(sum.signum() == 0 ? (Object) null : sum);
+            }
+            totalRow.add(grossSum);
+            totalRow.add(deductionSum);
+            totalRow.add(netSum);
+            rows.add(totalRow);
+        }
+        return new ExcelWriter.SheetData(name, columns, rows);
+    }
+
+    private static BigDecimal nvl(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * 工资条：长表 + 按员工分块（块间空行）。一列一个工资项会让上百列不可读，
+     * 长表也天然只含姓名/工号/部门/工资项/金额，不会带出证件号等敏感字段。
+     */
+    private ExcelWriter.SheetData payslipSheet(String name, List<GridColumn> itemColumns,
+                                               List<PayRecordEntity> records,
+                                               Map<Long, Map<String, BigDecimal>> itemsByRecord) {
+        List<ExcelWriter.Column> columns = List.of(
+                ExcelWriter.Column.text("工号"),
+                ExcelWriter.Column.text("姓名"),
+                ExcelWriter.Column.text("部门"),
+                ExcelWriter.Column.text("工资项"),
+                ExcelWriter.Column.money("金额"));
+        Map<String, String> itemNames = new java.util.LinkedHashMap<>();
+        itemColumns.forEach(c -> itemNames.put(c.itemCode(), c.itemName()));
+
+        List<List<Object>> rows = new ArrayList<>();
+        for (PayRecordEntity record : records) {
+            Map<String, BigDecimal> items = itemsByRecord.getOrDefault(record.getId(), Map.of());
+            for (Map.Entry<String, BigDecimal> item : items.entrySet()) {
+                rows.add(List.of(record.getEmpNo(), record.getEmpName(), record.getDeptName(),
+                        itemNames.getOrDefault(item.getKey(), item.getKey()), item.getValue()));
+            }
+            rows.add(List.of(record.getEmpNo(), record.getEmpName(), record.getDeptName(),
+                    "应发合计", nvl(record.getGrossAmount())));
+            rows.add(List.of(record.getEmpNo(), record.getEmpName(), record.getDeptName(),
+                    "扣款合计", nvl(record.getDeductionAmount())));
+            rows.add(List.of(record.getEmpNo(), record.getEmpName(), record.getDeptName(),
+                    "实发合计", nvl(record.getNetAmount())));
+            rows.add(List.of()); // 员工块之间的空行
+        }
         return new ExcelWriter.SheetData(name, columns, rows);
     }
 

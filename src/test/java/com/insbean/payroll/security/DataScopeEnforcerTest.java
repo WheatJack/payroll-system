@@ -87,6 +87,8 @@ class DataScopeEnforcerTest extends AbstractDbTest {
 
         periodId = periodService.create(new PeriodCreateReq(null, "2026-11"), TestDb.COMPANY_DEFAULT).id();
         generateService.startGenerate(periodId, USER);
+        // 部门主管/本人只能看已锁定期间（A2）：数据范围用例统一在锁定后验证
+        periodService.lock(periodId, 2L);
     }
 
     @Test
@@ -140,6 +142,8 @@ class DataScopeEnforcerTest extends AbstractDbTest {
 
     @Test
     void SELF用户不能改他人的核算记录() {
+        // 解锁回编制中：受限账号连"未锁定期间"都不该看到，越权在状态判断之前拦截
+        periodService.unlock(periodId, 2L, "数据范围用例");
         asUser("SELF", selfEmployee, TestDb.DEPT_DEFAULT);
         Long otherRecordId = jdbc.queryForObject(
                 "SELECT id FROM pay_record WHERE period_id = ? AND emp_no = 'E003'", Long.class, periodId);

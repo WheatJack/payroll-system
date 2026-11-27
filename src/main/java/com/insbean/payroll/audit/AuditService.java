@@ -3,8 +3,11 @@ package com.insbean.payroll.audit;
 import com.insbean.payroll.audit.mapper.AuditMapper;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.mapper.AuthMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.LocalDateTime;
 
@@ -56,8 +59,31 @@ public class AuditService {
         entity.setNewValue(truncate(newValue));
         entity.setOperatorId(current == null ? 0L : current.userId());
         entity.setOperatorName(resolveOperatorName(current));
+        HttpServletRequest request = currentRequest();
+        if (request != null) {
+            entity.setIp(clientIp(request));
+            String userAgent = request.getHeader("User-Agent");
+            entity.setUserAgent(userAgent == null ? null
+                    : userAgent.substring(0, Math.min(userAgent.length(), 255)));
+        }
         entity.setCreatedAt(LocalDateTime.now());
         auditMapper.insert(entity);
+    }
+
+    /** 非 Web 线程（定时任务/测试）返回 null，审计字段留空而不是伪造。 */
+    private static HttpServletRequest currentRequest() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            return attributes.getRequest();
+        }
+        return null;
+    }
+
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     private String resolveOperatorName(CurrentUser current) {

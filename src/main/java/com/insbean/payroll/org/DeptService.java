@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insbean.payroll.domain.entity.SysDeptEntity;
 import com.insbean.payroll.org.dto.DeptDTO;
 import com.insbean.payroll.org.mapper.DeptMapper;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.DataScopeEnforcer;
+import com.insbean.payroll.security.mapper.AuthMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -13,10 +15,12 @@ import java.util.List;
 public class DeptService {
 
     private final DeptMapper deptMapper;
+    private final AuthMapper authMapper;
     private final DataScopeEnforcer dataScope;
 
-    public DeptService(DeptMapper deptMapper, DataScopeEnforcer dataScope) {
+    public DeptService(DeptMapper deptMapper, AuthMapper authMapper, DataScopeEnforcer dataScope) {
         this.deptMapper = deptMapper;
+        this.authMapper = authMapper;
         this.dataScope = dataScope;
     }
 
@@ -35,6 +39,16 @@ public class DeptService {
                 .orderByAsc(SysDeptEntity::getId);
         if (!includeDisabled) {
             query.eq(SysDeptEntity::getStatus, 1);
+        }
+        // 部门级账号只返回自己可见的部门：主管不该在下拉里看到一个选了就返回空的部门
+        CurrentUser current = CurrentUser.get();
+        if (current != null && !DataScopeEnforcer.ALL.equals(current.dataScope())) {
+            Long myDept = authMapper.findDeptId(current.userId());
+            if (DataScopeEnforcer.DEPT.equals(current.dataScope()) && myDept != null) {
+                query.eq(SysDeptEntity::getId, myDept);
+            } else if (DataScopeEnforcer.DEPT_SUB.equals(current.dataScope()) && myDept != null) {
+                query.in(SysDeptEntity::getId, deptMapper.findSubtreeIds(myDept));
+            }
         }
         return deptMapper.selectList(query)
                 .stream()

@@ -49,7 +49,17 @@ public class ItemService {
             query.eq(PayItemEntity::getStatus, status);
         }
         query.orderByAsc(PayItemEntity::getSortNo).orderByAsc(PayItemEntity::getId);
-        return itemMapper.selectList(query).stream().map(ItemService::toDto).toList();
+        // 同一 itemCode 可能同时存在集团通用(company_id=0)与主体专属：主体专属优先，
+        // 且只保留一条——否则 toDomainDefs 的 Map 会随机覆盖、编制台会出现重复列。
+        Map<String, PayItemDefDTO> merged = new LinkedHashMap<>();
+        for (PayItemEntity row : itemMapper.selectList(query)) {
+            PayItemDefDTO dto = toDto(row);
+            PayItemDefDTO existing = merged.get(dto.itemCode());
+            if (existing == null || (dto.companyId() != null && dto.companyId() != GLOBAL_COMPANY)) {
+                merged.put(dto.itemCode(), dto);
+            }
+        }
+        return List.copyOf(merged.values());
     }
 
     /**
@@ -121,7 +131,12 @@ public class ItemService {
             entity.setPrecisionScale(requirePrecisionScale(req.precisionScale()));
         }
         if (req.includeInGross() != null) {
-            entity.setIncludeInGross(booleanFlag(req.includeInGross(), true));
+            Integer newFlag = booleanFlag(req.includeInGross(), true);
+            if (!newFlag.equals(entity.getIncludeInGross())) {
+                // 改口径会让历史期间的"合计 ≠ 明细按新口径加总"，与 category/direction 同级保护
+                requireUnused(entity.getItemCode(), "计入应发设置");
+                entity.setIncludeInGross(newFlag);
+            }
         }
         if (req.editable() != null) {
             entity.setEditable(booleanFlag(req.editable(), true));
@@ -140,10 +155,21 @@ public class ItemService {
     }
 
     public PayItemEntity requireItem(Long companyId, String itemCode) {
-        PayItemEntity entity = itemMapper.selectOne(Wrappers.<PayItemEntity>lambdaQuery()
-                .in(PayItemEntity::getCompanyId, GLOBAL_COMPANY, companyId == null ? GLOBAL_COMPANY : companyId)
-                .eq(PayItemEntity::getItemCode, itemCode)
-                .last("LIMIT 1"));
+        Long scope = companyId == null ? GLOBAL_COMPANY : companyId;
+        // 先查主体专属，再回退集团通用：两个都存在时不能靠 LIMIT 1 的返回顺序决定口径
+        PayItemEntity entity = null;
+        if (scope != null && scope != GLOBAL_COMPANY) {
+            entity = itemMapper.selectOne(Wrappers.<PayItemEntity>lambdaQuery()
+                    .eq(PayItemEntity::getCompanyId, scope)
+                    .eq(PayItemEntity::getItemCode, itemCode)
+                    .last("LIMIT 1"));
+        }
+        if (entity == null) {
+            entity = itemMapper.selectOne(Wrappers.<PayItemEntity>lambdaQuery()
+                    .eq(PayItemEntity::getCompanyId, GLOBAL_COMPANY)
+                    .eq(PayItemEntity::getItemCode, itemCode)
+                    .last("LIMIT 1"));
+        }
         if (entity == null) {
             throw new BizException(400, "工资项不存在：" + itemCode);
         }

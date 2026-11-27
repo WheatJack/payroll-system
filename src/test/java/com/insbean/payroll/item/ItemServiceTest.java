@@ -55,6 +55,41 @@ class ItemServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 同一编码的主体专属科目优先且不重复() {
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction, data_type,
+                                      precision_scale, include_in_gross, editable, importable, sort_no, status)
+                VALUES (1, 'PERF_BONUS', '绩效奖金(本公司)', 'VARIABLE', 1, 'AMOUNT', 4, 1, 1, 1, 40, 1)
+                """);
+
+        List<PayItemDefDTO> own = service.list(1L, null, null);
+        assertThat(own).filteredOn(d -> d.itemCode().equals("PERF_BONUS"))
+                .singleElement()
+                .satisfies(d -> {
+                    assertThat(d.companyId()).isEqualTo(1L);
+                    assertThat(d.itemName()).isEqualTo("绩效奖金(本公司)");
+                    assertThat(d.precisionScale()).isEqualTo(4);
+                });
+        assertThat(service.requireItem(1L, "PERF_BONUS").getCompanyId()).isEqualTo(1L);
+        // 其它主体仍然回退到集团通用定义
+        assertThat(service.requireItem(2L, "PERF_BONUS").getCompanyId()).isZero();
+    }
+
+    @Test
+    void 已被使用的科目不能修改计入应发开关() {
+        jdbc.update("""
+                INSERT INTO pay_record_item
+                  (record_id, item_code, item_name, category, direction, amount, source, sort_no)
+                VALUES (1, 'PERF_BONUS', '绩效奖金', 'VARIABLE', 1, 100, 'MANUAL', 40)
+                """);
+
+        assertThatThrownBy(() -> service.update(4L, new PayItemUpdateReq(
+                null, null, null, null, null, false, null, null, null, null)))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(409);
+    }
+
+    @Test
     void 合并集团通用科目与主体专属科目() {
         // 服务端只给北京分公司配了一个专属科目
         jdbc.update("""

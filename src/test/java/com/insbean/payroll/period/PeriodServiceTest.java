@@ -79,8 +79,9 @@ class PeriodServiceTest extends AbstractDbTest {
 
     @Test
     void 租约过期后可被抢占() throws InterruptedException {
+        // 租约 TTL 与过期判定都用数据库时钟；真实等待一小段时间后应可被抢占
         periodService.tryAcquire(periodId, "task-1", Duration.ofMillis(1));
-        Thread.sleep(5);
+        Thread.sleep(20);
 
         assertThat(periodService.tryAcquire(periodId, "task-2", Duration.ofMinutes(10))).isTrue();
     }

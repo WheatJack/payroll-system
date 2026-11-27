@@ -142,7 +142,16 @@ class ExportServiceTest extends AbstractDbTest {
                 Sheet sheet = workbook.getSheetAt(0);
                 List<String> headers = new ArrayList<>();
                 sheet.getRow(0).forEach(c -> headers.add(c.getStringCellValue()));
-                assertThat(headers).contains("工号", "姓名", "部门", "绩效奖金", "应发合计");
+                assertThat(headers).contains("法人主体", "期间", "工号", "姓名", "部门", "绩效奖金", "应发合计");
+                // 末尾有「合计」行
+                List<String> firstCells = new ArrayList<>();
+                for (int r = 0; r <= sheet.getLastRowNum(); r++) {
+                    var c = sheet.getRow(r) == null ? null : sheet.getRow(r).getCell(0);
+                    if (c != null && c.getCellType() == CellType.STRING) {
+                        firstCells.add(c.getStringCellValue());
+                    }
+                }
+                assertThat(firstCells).contains("合计");
 
                 // 绩效奖金列应带出明细金额且为数值
                 int perfIndex = headers.indexOf("绩效奖金");
@@ -165,12 +174,19 @@ class ExportServiceTest extends AbstractDbTest {
                  XSSFWorkbook workbook = new XSSFWorkbook(in)) {
                 List<String> headers = new ArrayList<>();
                 workbook.getSheetAt(0).getRow(0).forEach(c -> headers.add(c.getStringCellValue()));
-                assertThat(headers).contains("工号", "姓名", "部门", "实发合计");
+                assertThat(headers).containsExactly("工号", "姓名", "部门", "工资项", "金额");
                 assertThat(headers).noneMatch(h -> h.contains("证件") || h.contains("手机") || h.contains("银行卡"));
-                // 工号是文本单元格，长工号不会被 Excel 转成科学计数法
+                // 长表结构：工号是文本单元格，且每个员工有独立的「实发合计」块
                 Cell empNo = workbook.getSheetAt(0).getRow(1).getCell(0);
                 assertThat(empNo.getCellType()).isEqualTo(CellType.STRING);
                 assertThat(empNo.getStringCellValue()).isEqualTo("E001");
+                List<String> itemLabels = new ArrayList<>();
+                workbook.getSheetAt(0).forEach(r -> {
+                    if (r.getCell(3) != null) {
+                        itemLabels.add(r.getCell(3).getStringCellValue());
+                    }
+                });
+                assertThat(itemLabels).contains("实发合计");
             }
         } finally {
             Files.deleteIfExists(prepared.path());
@@ -289,8 +305,16 @@ class ExportServiceTest extends AbstractDbTest {
                 "XLSX"));
         try (InputStream in = Files.newInputStream(prepared.path());
              XSSFWorkbook workbook = new XSSFWorkbook(in)) {
-            assertThat(workbook.getSheetAt(0).getLastRowNum()).isEqualTo(1);
-            assertThat(workbook.getSheetAt(0).getRow(1).getCell(0).getStringCellValue()).isEqualTo("E001");
+            Sheet sheet = workbook.getSheetAt(0);
+            assertThat(sheet.getRow(1).getCell(0).getStringCellValue()).isEqualTo("E001");
+            boolean hasNetRow = false;
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+                var label = sheet.getRow(i) == null ? null : sheet.getRow(i).getCell(3);
+                if (label != null && "实发合计".equals(label.getStringCellValue())) {
+                    hasNetRow = true;
+                }
+            }
+            assertThat(hasNetRow).isTrue();
         } finally {
             Files.deleteIfExists(prepared.path());
         }

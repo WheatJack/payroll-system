@@ -6,5 +6,7 @@ public enum PaySource {
     VARIABLE,
     COMPUTED,
     /** 编制台手工修改；重新生成时必须原样保留，不能被计算值覆盖。 */
-    MANUAL
+    MANUAL,
+    /** 导入写入；重新生成时同样必须原样保留（含 FIXED 类导入）。 */
+    IMPORT
 }

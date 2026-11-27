@@ -465,8 +465,11 @@ class GenerateServiceTest extends AbstractDbTest {
         assertThat(jdbc.queryForObject(
                 "SELECT last_run_fail_count FROM pay_period WHERE id = ?", Integer.class, periodId))
                 .isEqualTo(1);
-        // 期间仍是编制中，不能被当成可锁定
+        // 期间仍是编制中，且禁止锁定：漏算的人被锁定后就永久排除
         assertThat(periodService.get(periodId).status()).isEqualTo("EDITING");
+        assertThatThrownBy(() -> periodService.lock(periodId, 2L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("失败");
     }
 
     @Test

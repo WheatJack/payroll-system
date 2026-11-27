@@ -71,6 +71,14 @@ public class PeriodService {
         List<PayPeriodEntity> periods = periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
                 .eq(PayPeriodEntity::getCompanyId, companyId)
                 .orderByDesc(PayPeriodEntity::getPeriodYm));
+        // 部门主管/本人只看已锁定与已归档期间：编制中的数据对他们不可见
+        CurrentUser current = CurrentUser.get();
+        if (current != null && !DataScopeEnforcer.ALL.equals(current.dataScope())
+                && !DataScopeEnforcer.COMPANY.equals(current.dataScope())) {
+            periods = periods.stream()
+                    .filter(p -> "LOCKED".equals(p.getStatus()) || "ARCHIVED".equals(p.getStatus()))
+                    .toList();
+        }
         Map<Long, PeriodAggregate> aggregates = visibleAggregates(
                 periods.stream().map(PayPeriodEntity::getId).toList());
         return periods.stream()
@@ -210,9 +218,17 @@ public class PeriodService {
             throw new BizException(409, "期间尚未生成，只有编制中的期间可以锁定");
         }
         // 生成租约未过期时禁止锁定：否则会出现"锁定成功但首批已写、后续批次 409"的半成品期间
-        if (period.getProcessingOwner() != null && period.getProcessingExpireAt() != null
-                && period.getProcessingExpireAt().isAfter(LocalDateTime.now())) {
+        if (periodMapper.isLeaseActive(periodId) > 0) {
             throw new BizException(409, "期间正在生成，请等待完成后锁定");
+        }
+        // 有失败员工未处理时禁止锁定：锁了就再也改不了，漏算的人被永久排除
+        if (period.getLastRunFailCount() != null && period.getLastRunFailCount() > 0) {
+            throw new BizException(409, "上次生成有 " + period.getLastRunFailCount()
+                    + " 人失败，请先处理再锁定（可在生成进度中查看失败明细）");
+        }
+        String latestRunStatus = periodMapper.findLatestRunStatus(periodId);
+        if (latestRunStatus != null && !"SUCCESS".equals(latestRunStatus)) {
+            throw new BizException(409, "最近一次生成未成功（" + latestRunStatus + "），请先重新生成再锁定");
         }
         if (period.getCompiledBy() != null && period.getCompiledBy().equals(userId)) {
             throw new BizException(400, "锁定人不能是本期间的编制人，请由他人复核锁定");
@@ -273,8 +289,12 @@ public class PeriodService {
         if (owner == null || owner.isBlank()) {
             throw new BizException(400, "租约持有者标识必填");
         }
-        LocalDateTime expireAt = LocalDateTime.now().plus(ttl);
-        return periodMapper.tryAcquire(periodId, owner, expireAt) > 0;
+        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
+            throw new BizException(400, "租约有效期必须大于 0");
+        }
+        // 纳秒转微秒，至少 1 微秒；过期时间由数据库 NOW(6) 计算
+        long ttlMicros = Math.max(1L, ttl.toNanos() / 1000L);
+        return periodMapper.tryAcquire(periodId, owner, ttlMicros) > 0;
     }
 
     public void release(Long periodId, String owner) {

@@ -163,9 +163,10 @@ CREATE TABLE emp_comp_profile (
   updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   deleted        TINYINT       NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
-  -- 同一员工同一生效日只允许一条"有效"档案；把 deleted 纳入唯一键，
-  -- 是为了让被作废（逻辑删除）的旧段让出这个日期，从而支持"作废旧段 + 同日重开新段"
-  UNIQUE KEY uk_emp_effective (employee_id, effective_from, deleted),
+  -- 生成列：只让"有效"段参与唯一约束。把 deleted 直接放进唯一键会让同一天
+  -- 只能存在一条作废段，第二次同日更正会撞键（同一错误改不回来）。
+  active_key TINYINT AS (IF(deleted = 0, 1, NULL)) STORED,
+  UNIQUE KEY uk_emp_effective (employee_id, effective_from, active_key),
   KEY idx_emp_range (employee_id, effective_from, effective_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='薪酬档案（按生效区间版本化）';
 
@@ -337,7 +338,9 @@ CREATE TABLE pay_record (
   KEY idx_period_emp (period_id, employee_id),
   KEY idx_period_dept (period_id, dept_id),
   KEY idx_employee (employee_id),
-  KEY idx_period_status (period_id, record_status)
+  KEY idx_period_status (period_id, record_status),
+  -- 集团级跨期间报表/查重按 period_ym 过滤，避免退化成全表扫
+  KEY idx_period_ym (period_ym)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工资核算记录（含人员快照）';
 
 CREATE TABLE pay_record_item (

@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CompProfileServiceTest extends AbstractDbTest {
@@ -195,6 +196,22 @@ class CompProfileServiceTest extends AbstractDbTest {
                 """, empId);
         assertThat(audit.get("old_value")).isEqualTo("8000.00");
         assertThat(audit.get("new_value")).isEqualTo("9000.00");
+    }
+
+    @Test
+    void 同一天连续两次更正都要成功() {
+        // setUp 已有 2025-07-01 的 8000 段：第一次更正会把它作废（deleted=1）
+        service.save(req(empId, LocalDate.of(2025, 7, 1), "9000", "第一次更正"));
+        // 第二次更正要再作废一个新段；旧唯一键 (employee, date, deleted) 在这里会撞键
+        assertThatCode(() -> service.save(req(empId, LocalDate.of(2025, 7, 1), "9500", "第二次更正")))
+                .doesNotThrowAnyException();
+
+        List<CompProfileDTO> sameDay = service.timeline(empId).stream()
+                .filter(p -> p.effectiveFrom().equals(LocalDate.of(2025, 7, 1)))
+                .toList();
+        assertThat(sameDay).hasSize(1);
+        assertThat(sameDay.get(0).baseSalary()).isEqualByComparingTo("9500");
+        assertThat(sameDay.get(0).status()).isEqualTo(1);
     }
 
     private static CompProfileSaveReq req(Long employeeId, LocalDate from, String salary, String reason) {

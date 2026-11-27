@@ -134,3 +134,15 @@ UPDATE pay_record r
  WHERE p.status IN ('LOCKED', 'ARCHIVED')
    AND r.record_status = 'DRAFT'
    AND r.deleted = 0;
+
+-- 17) C1 uk_emp_effective 改为 active_key 生成列
+--     deleted 直接进唯一键时，同一天只能有一条"已作废"段：第二次同日更正会撞键，
+--     员工同一天调薪改错后再也改不回来。
+ALTER TABLE emp_comp_profile
+  DROP INDEX uk_emp_effective,
+  ADD COLUMN active_key TINYINT AS (IF(deleted = 0, 1, NULL)) STORED,
+  ADD UNIQUE KEY uk_emp_effective (employee_id, effective_from, active_key);
+
+-- 18) pay_record.period_ym 索引（集团级跨期间查询）
+ALTER TABLE pay_record
+  ADD KEY idx_period_ym (period_ym);

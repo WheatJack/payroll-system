@@ -72,6 +72,13 @@ public class DataScopeEnforcer {
             throw new BizException(404, "工资期间不存在");
         }
         assertCompanyVisible(period.getCompanyId());
+        // 编制中的工资表是未复核数据：部门主管/本人只能看已锁定/已归档期间，
+        // 否则会把随时会变的数字当成最终版外传，或与锁定版对不上产生纠纷。
+        CurrentUser current = requireUser();
+        if (!ALL.equals(current.dataScope()) && !COMPANY.equals(current.dataScope())
+                && !"LOCKED".equals(period.getStatus()) && !"ARCHIVED".equals(period.getStatus())) {
+            throw forbidden("无权查看未锁定期间的数据");
+        }
     }
 
     public void assertEmployeeVisible(Long employeeId) {

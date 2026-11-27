@@ -536,6 +536,28 @@ class SystemAdminTest extends AbstractDbTest {
     }
 
     @Test
+    void 部门级账号只看到自己可见范围的部门() {
+        jdbc.update("""
+                INSERT INTO sys_dept (id, company_id, parent_id, dept_code, dept_name, ancestors, sort_no, status)
+                VALUES (10, 1, 1, 'D010', '研发组', ',1,', 10, 1),
+                       (20, 1, 0, 'D020', '财务部', '', 20, 1)
+                """);
+
+        // hr01 属于部门 1，DEPT_SUB → 只应看到部门 1 及其下级
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "DEPT_SUB", Set.of("payroll:record:view"));
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT, false))
+                .extracting(DeptDTO::id).containsExactlyInAnyOrder(1L, 10L);
+
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "DEPT", Set.of("payroll:record:view"));
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT, false))
+                .extracting(DeptDTO::id).containsExactly(1L);
+
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+        assertThat(deptService.tree(TestDb.COMPANY_DEFAULT, false))
+                .extracting(DeptDTO::id).contains(1L, 10L, 20L);
+    }
+
+    @Test
     void 部门列表默认不含停用部门_includeDisabled可返回() {
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
         DeptDTO disabled = deptAdminService.create(new DeptCreateReq(

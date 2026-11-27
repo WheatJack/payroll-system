@@ -388,6 +388,46 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 不存在的路由返回404而不是500() throws Exception {
+        MvcResult result = mvc.perform(get("/api/v1/definitely-not-a-route")).andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(404);
+        JsonNode body = objectMapper.readTree(body(result));
+        assertThat(body.path("code").asInt()).isEqualTo(404);
+    }
+
+    @Test
+    void 部门主管看不到编制中的期间与编制台() throws Exception {
+        long locked = lockedPayroll();
+        long editing = periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(editing, 1L);
+
+        // hr02 改为部门 1 的 DEPT_SUB 账号
+        jdbc.update("UPDATE sys_user SET dept_id = 1 WHERE id = 2");
+        jdbc.update("""
+                INSERT INTO sys_role (id, company_id, role_code, role_name, data_scope, status)
+                VALUES (11, 1, 'DEPT_LEAD', '部门主管', 'DEPT_SUB', 1)
+                """);
+        jdbc.update("INSERT INTO sys_role_grant (role_id, perm_code) VALUES (11, 'payroll:record:view')");
+        jdbc.update("DELETE FROM sys_user_role WHERE user_id = 2");
+        jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (2, 11)");
+        String lead = login("hr02");
+
+        JsonNode periods = getJson("/api/v1/periods", lead);
+        List<String> ids = new java.util.ArrayList<>();
+        for (JsonNode node : periods.path("data")) {
+            ids.add(node.path("id").asText());
+        }
+        assertThat(ids).contains(String.valueOf(locked));
+        assertThat(ids).doesNotContain(String.valueOf(editing));
+
+        // 编制台：未锁定期间对主管 403
+        assertThat(mvc.perform(get("/api/v1/periods/" + editing + "/grid")
+                        .header("Authorization", "Bearer " + lead))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+    }
+
+    @Test
     void 报表查询与导出走真实HTTP() throws Exception {
         long periodId = lockedPayroll();
         // 另建一个有明细但未锁定的期间，报表必须显式列出它而不是静默漏掉

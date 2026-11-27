@@ -77,6 +77,9 @@ public class ImportService {
     private static final String SOURCE_IMPORT = "IMPORT";
     private static final String MODE_UPSERT = "UPSERT";
     private static final String MODE_INSERT_ONLY = "INSERT_ONLY";
+    /** 逐格审计上限：超过部分汇总成一条，避免一次导入写爆审计表。 */
+    private static final int MAX_DETAILED_CHANGES = 1000;
+
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss").withZone(ZoneId.systemDefault());
 
@@ -295,6 +298,8 @@ public class ImportService {
     public ImportCommitResultDTO commit(Long batchId) {
         ImportBatchEntity existing = requireBatch(batchId);
         dataScope.assertPeriodVisible(existing.getPeriodId());
+        // 部门级账号只能提交自己发起的批次（与 get/errors 同一口径）
+        assertBatchReadable(existing);
         // 快速失败（只读）：避免为一个明显不能提交的批次去抢锁
         if (STATUS_COMMITTED.equals(existing.getStatus())) {
             throw new BizException(409, "该批次已提交，不能重复提交");
@@ -307,17 +312,21 @@ public class ImportService {
         }
         periodService.assertWritable(existing.getPeriodId());
 
-        try {
-            return transactionTemplate.execute(status -> applyInTransaction(batchId));
-        } catch (RevalidationFailed e) {
-            // 重新校验失败：事务已回滚，用新事务把最新错误与 failRows 刷回去。
-            // 否则前端轮询看到 failRows=0 却收到 409，根本不知道错在哪一行。
-            refreshValidationFailure(batchId, e.result);
-            throw new ImportConflictException(batchId, e.result.failRows());
+        // 重放 + 重新校验放在事务外：解析 5 万行 Excel 期间不持有期间/批次行锁，
+        // 避免把并发锁定、其它导入全部堵住。失败在事务外刷新错误表后返回 409。
+        PayPeriodEntity period = periodService.requirePeriod(existing.getPeriodId());
+        ImportValidator.Result result = validator.validate(Path.of(existing.getFilePath()),
+                existing.getPeriodId(), period.getCompanyId(), existing.getBizType(),
+                maxRows, maxErrorRows);
+        if (result.failRows() > 0) {
+            refreshValidationFailure(batchId, result);
+            throw new ImportConflictException(batchId, result.failRows());
         }
+
+        return transactionTemplate.execute(status -> applyInTransaction(batchId, result));
     }
 
-    private ImportCommitResultDTO applyInTransaction(Long batchId) {
+    private ImportCommitResultDTO applyInTransaction(Long batchId, ImportValidator.Result result) {
         // 锁批次行，双击提交只有一次能成功
         ImportBatchEntity batch = batchMapper.selectForUpdate(batchId);
         if (batch == null) {
@@ -337,13 +346,6 @@ public class ImportService {
         dataScope.assertPeriodVisible(batch.getPeriodId());
 
         PayPeriodEntity period = periodService.requirePeriod(batch.getPeriodId());
-        // 提交时重放 + 重新校验：期间状态、记录内容（含数据范围）都可能已经变了
-        ImportValidator.Result result = validator.validate(Path.of(batch.getFilePath()),
-                batch.getPeriodId(), period.getCompanyId(), batch.getBizType(),
-                maxRows, maxErrorRows);
-        if (result.failRows() > 0) {
-            throw new RevalidationFailed(result);
-        }
 
         apply(period, batch, result);
         batch.setStatus(STATUS_COMMITTED);
@@ -356,16 +358,6 @@ public class ImportService {
         auditService.record("IMPORT", batchId, "UPDATE", "commit", null,
                 "mode=" + batch.getImportMode() + ";rows=" + result.rows().size());
         return new ImportCommitResultDTO(batchId, STATUS_COMMITTED, result.rows().size(), 0);
-    }
-
-    /** 重新校验失败的内部信号：事务需要回滚，错误刷新放到事务外的新事务里做。 */
-    private static final class RevalidationFailed extends RuntimeException {
-        private final ImportValidator.Result result;
-
-        private RevalidationFailed(ImportValidator.Result result) {
-            super("重新校验失败：" + result.failRows() + " 行");
-            this.result = result;
-        }
     }
 
     private void refreshValidationFailure(Long batchId, ImportValidator.Result result) {
@@ -388,15 +380,53 @@ public class ImportService {
     private void apply(PayPeriodEntity period, ImportBatchEntity batch,
                        ImportValidator.Result result) {
         Map<String, Boolean> includeByCode = includeInGross(period);
+        List<RecordChange> changes = new ArrayList<>();
         for (ImportValidator.ValidatedRow row : result.rows()) {
             for (Map.Entry<String, BigDecimal> entry : row.amounts().entrySet()) {
-                upsertItem(batch.getImportMode(), row.recordId(),
+                RecordChange change = upsertItem(batch.getImportMode(), row.recordId(),
                         entry.getKey(), entry.getValue(), result.itemDefs());
+                if (change != null) {
+                    changes.add(change);
+                }
             }
             recalcRecord(row.recordId(), includeByCode);
         }
+        auditChanges(batch.getId(), changes);
         // 明细变了，期间合计与列快照必须同步刷新
         totalsRefresher.refresh(period);
+    }
+
+    /** 导入覆盖的一格变更，用于写 old/new 审计。 */
+    private record RecordChange(Long recordId, String itemCode,
+                                BigDecimal oldAmount, BigDecimal newAmount) {
+    }
+
+    /**
+     * 导入覆盖逐格留痕。明细行数可能很大：只逐条记前 {@value #MAX_DETAILED_CHANGES} 条，
+     * 其余汇总成一条挂在批次上，保证能回答"这次导入到底改了哪些钱"。
+     */
+    private void auditChanges(Long batchId, List<RecordChange> changes) {
+        if (changes == null || changes.isEmpty()) {
+            return;
+        }
+        int detailed = Math.min(changes.size(), MAX_DETAILED_CHANGES);
+        for (int i = 0; i < detailed; i++) {
+            RecordChange change = changes.get(i);
+            if (change.oldAmount() == null || change.oldAmount().compareTo(change.newAmount()) != 0) {
+                auditService.record("RECORD", change.recordId(), "UPDATE", change.itemCode(),
+                        change.oldAmount() == null ? null : money(change.oldAmount()),
+                        money(change.newAmount()));
+            }
+        }
+        if (changes.size() > detailed) {
+            auditService.record("IMPORT", batchId, "UPDATE", "import_changes", null,
+                    "共 " + changes.size() + " 项变更，前 " + detailed
+                            + " 项已逐格记录，其余请在批次 " + batchId + " 明细中核对");
+        }
+    }
+
+    private static String money(BigDecimal value) {
+        return value == null ? null : com.insbean.payroll.common.Money.format(value);
     }
 
     /** 与计算/编制台同一口径：include_in_gross=false 的收入项不计入应发。 */
@@ -413,21 +443,23 @@ public class ImportService {
      * <p>APPEND（累加）已下线——对绝对金额做累加等价于"再发一次"，
      * 既绕开"每人每月一条"的唯一索引，也没有补回机制。
      */
-    private void upsertItem(String mode, Long recordId,
-                            String itemCode, BigDecimal amount,
-                            Map<String, PayItemDefDTO> itemDefs) {
+    private RecordChange upsertItem(String mode, Long recordId,
+                                    String itemCode, BigDecimal amount,
+                                    Map<String, PayItemDefDTO> itemDefs) {
         PayRecordItemEntity existing = recordItemMapper.selectOne(Wrappers.<PayRecordItemEntity>lambdaQuery()
                 .eq(PayRecordItemEntity::getRecordId, recordId)
                 .eq(PayRecordItemEntity::getItemCode, itemCode)
                 .last("LIMIT 1"));
         if (existing != null) {
             if (MODE_INSERT_ONLY.equals(mode)) {
-                return;
+                return null;
             }
+            BigDecimal oldAmount = existing.getAmount();
             existing.setAmount(amount);
             existing.setSource(SOURCE_IMPORT);
             recordItemMapper.updateById(existing);
-            return;
+            return oldAmount != null && oldAmount.compareTo(amount) == 0
+                    ? null : new RecordChange(recordId, itemCode, oldAmount, amount);
         }
 
         PayItemDefDTO def = itemDefs.get(itemCode);
@@ -441,6 +473,7 @@ public class ImportService {
         entity.setSource(SOURCE_IMPORT);
         entity.setSortNo(def == null || def.sortNo() == null ? 0 : def.sortNo());
         recordItemMapper.insert(entity);
+        return new RecordChange(recordId, itemCode, null, amount);
     }
 
     /**

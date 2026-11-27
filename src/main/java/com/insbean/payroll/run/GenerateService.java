@@ -2,6 +2,7 @@ package com.insbean.payroll.run;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.domain.entity.EmpEmployeeEntity;
 import com.insbean.payroll.domain.entity.PayPeriodEntity;
@@ -111,6 +112,7 @@ public class GenerateService {
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
     private final ConfigService configService;
+    private final AuditService auditService;
     private final DataScopeEnforcer dataScope;
     private final PeriodTotalsRefresher totalsRefresher;
     private final TransactionTemplate transactionTemplate;
@@ -132,6 +134,7 @@ public class GenerateService {
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
                            ConfigService configService,
+                           AuditService auditService,
                            DataScopeEnforcer dataScope,
                            PeriodTotalsRefresher totalsRefresher,
                            PlatformTransactionManager transactionManager) {
@@ -150,6 +153,7 @@ public class GenerateService {
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
         this.configService = configService;
+        this.auditService = auditService;
         this.dataScope = dataScope;
         this.totalsRefresher = totalsRefresher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -262,9 +266,17 @@ public class GenerateService {
             BigDecimal divisor = payableDaysDivisor;
             BigDecimal seniority = seniorityPayPerYear;
             Set<LocalDate> days = holidays;
-            transactionTemplate.executeWithoutResult(status ->
+            // 计数只在事务提交后合并：批内回滚时不能把"已成功 N 人"算进进度
+            BatchProgress batchProgress = transactionTemplate.execute(status ->
                     processBatch(period, periodStart, periodEnd, itemDefs, sortNoByCode, batch,
-                            operatorId, progress, divisor, seniority, days));
+                            operatorId, divisor, seniority, days));
+            mergeBatch(progress, batchProgress);
+            // 生成也是"创建核算记录"：按批记一条，不逐人写（上万条会爆审计表）
+            if (batchProgress != null && batchProgress.success > 0) {
+                auditService.record("RECORD", period.getId(), "CREATE", "generate", null,
+                        "periodYm=" + period.getPeriodYm() + ";batch=" + (from / BATCH_SIZE + 1)
+                                + ";created=" + batchProgress.success);
+            }
         }
 
         // 生成结束后才能统计到实际折算人数：节假日未配置是有钱风险的提示，必须让人看见
@@ -274,17 +286,17 @@ public class GenerateService {
         }
     }
 
-    private void processBatch(PayPeriodEntity period,
-                              LocalDate periodStart,
-                              LocalDate periodEnd,
-                              Map<String, PayItemDef> itemDefs,
-                              Map<String, Integer> sortNoByCode,
-                              List<EmpEmployeeEntity> batch,
-                              Long operatorId,
-                              Progress progress,
-                              BigDecimal payableDaysDivisor,
-                              BigDecimal seniorityPayPerYear,
-                              Set<LocalDate> holidays) {
+    private BatchProgress processBatch(PayPeriodEntity period,
+                                       LocalDate periodStart,
+                                       LocalDate periodEnd,
+                                       Map<String, PayItemDef> itemDefs,
+                                       Map<String, Integer> sortNoByCode,
+                                       List<EmpEmployeeEntity> batch,
+                                       Long operatorId,
+                                       BigDecimal payableDaysDivisor,
+                                       BigDecimal seniorityPayPerYear,
+                                       Set<LocalDate> holidays) {
+        BatchProgress progress = new BatchProgress();
         // 每批都在事务内重新加锁校验期间状态：批次之间可能被锁定，
         // 只在入口校验一次的话，锁定后的批次照样会写进去。
         periodService.assertWritableForUpdate(period.getId());
@@ -292,7 +304,7 @@ public class GenerateService {
         Map<Long, PayRecordEntity> existingByEmployee = existing.stream()
                 .collect(Collectors.toMap(PayRecordEntity::getEmployeeId, Function.identity(), (a, b) -> a));
         Map<Long, Map<String, BigDecimal>> existingVariableAmounts = loadVariableAmounts(existing);
-        Map<Long, Map<String, PayRecordItemEntity>> manualItems = loadManualItems(existing);
+        Map<Long, Map<String, PayRecordItemEntity>> manualItems = loadPreservedItems(existing);
 
         for (EmpEmployeeEntity emp : batch) {
             // 离职却没有离职日期：不臆造日期去改钱，直接跳过并给出可操作的原因
@@ -374,6 +386,7 @@ public class GenerateService {
             }
             progress.success++;
         }
+        return progress;
     }
 
     private void insertItems(Long recordId, PayrollResult result, Map<String, Integer> sortNoByCode) {
@@ -400,14 +413,19 @@ public class GenerateService {
                                 PayRecordItemEntity::getAmount, (a, b) -> a)));
     }
 
-    /** 来源为 MANUAL 的明细（任意类别），重算时整体覆盖计算值。 */
-    private Map<Long, Map<String, PayRecordItemEntity>> loadManualItems(List<PayRecordEntity> records) {
+    /**
+     * 重算时需要保留的明细：编制台手工改的（MANUAL）与导入的（IMPORT），任意类别。
+     *
+     * <p>只保留 MANUAL 会漏掉 FIXED 类的导入数据——它既不在档案里也不在变动项里，
+     * 重写明细时会被整体删除再按档案重插，导入金额静默消失且 run 仍是 SUCCESS。
+     */
+    private Map<Long, Map<String, PayRecordItemEntity>> loadPreservedItems(List<PayRecordEntity> records) {
         if (records.isEmpty()) {
             return Map.of();
         }
         List<Long> ids = records.stream().map(PayRecordEntity::getId).toList();
         return recordItemMapper.findByRecordIds(ids).stream()
-                .filter(i -> "MANUAL".equals(i.getSource()))
+                .filter(i -> "MANUAL".equals(i.getSource()) || "IMPORT".equals(i.getSource()))
                 .collect(Collectors.groupingBy(PayRecordItemEntity::getRecordId,
                         Collectors.toMap(PayRecordItemEntity::getItemCode, i -> i, (a, b) -> a)));
     }
@@ -443,7 +461,7 @@ public class GenerateService {
                 byCode.put(entity.getItemCode(), new PayItemResult(
                         entity.getItemCode(), entity.getItemName(), category,
                         decrease ? PayDirection.DECREASE : PayDirection.INCREASE,
-                        entity.getAmount(), PaySource.MANUAL, includeInGross));
+                        entity.getAmount(), sourceOf(entity.getSource()), includeInGross));
             }
         }
         List<PayItemResult> items = new ArrayList<>(byCode.values());
@@ -456,6 +474,15 @@ public class GenerateService {
                 .map(PayItemResult::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return new PayrollResult(List.copyOf(items), gross, deduction, gross.subtract(deduction));
+    }
+
+    /** 保留明细的来源（MANUAL/IMPORT）；未知值按手工处理，宁可保留也不丢。 */
+    private static PaySource sourceOf(String raw) {
+        try {
+            return raw == null ? PaySource.MANUAL : PaySource.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            return PaySource.MANUAL;
+        }
     }
 
     /**
@@ -645,10 +672,32 @@ public class GenerateService {
         List<String> warnings = new ArrayList<>();
         /** 完整跳过明细（persistSkips 用；不进 progress JSON）。 */
         List<RunSkipDetail> skipDetails = new ArrayList<>();
+    }
+
+    /** 单批事务内累计的进度；事务成功提交后才合并进总进度。 */
+    static final class BatchProgress {
+        int success;
+        int failed;
+        int prorated;
+        List<RunErrorDTO> errors = new ArrayList<>();
+        Map<String, String> skipped = new LinkedHashMap<>();
+        List<RunSkipDetail> skipDetails = new ArrayList<>();
 
         void skip(EmpEmployeeEntity emp, String reason) {
             skipped.put(emp.getEmpNo(), reason);
             skipDetails.add(new RunSkipDetail(emp.getEmpNo(), emp.getName(), reason));
         }
+    }
+
+    private static void mergeBatch(Progress progress, BatchProgress batch) {
+        if (batch == null) {
+            return;
+        }
+        progress.success += batch.success;
+        progress.failed += batch.failed;
+        progress.prorated += batch.prorated;
+        progress.errors.addAll(batch.errors);
+        progress.skipped.putAll(batch.skipped);
+        progress.skipDetails.addAll(batch.skipDetails);
     }
 }

@@ -135,9 +135,10 @@ public class RecordService {
      */
     @Transactional
     public ChangesetResult applyChangeset(Long periodId, ChangesetReq req) {
+        // 越权先于状态判断：受限账号看不到未锁定期间，直接 403 而不是先报"已锁定"
+        dataScope.assertPeriodVisible(periodId);
         // 写事务内加行锁校验期间状态：普通 SELECT 的快照校验挡不住"校验通过后被锁定"
         periodService.assertWritableForUpdate(periodId);
-        dataScope.assertPeriodVisible(periodId);
         PayPeriodEntity period = periodService.requirePeriod(periodId);
 
         if (req == null || req.changes() == null || req.changes().isEmpty()) {

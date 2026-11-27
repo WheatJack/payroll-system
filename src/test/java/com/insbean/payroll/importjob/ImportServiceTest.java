@@ -110,6 +110,24 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 导入的固定项在重新生成后保留() throws Exception {
+        ImportValidateResultDTO result = importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null);
+        importService.commit(result.batchId());
+        assertThat(itemAmount("E001", "POST_ALLOW")).isEqualByComparingTo("1500.00");
+
+        // 重新生成：IMPORT 的固定项既不在档案、也不在变动项，但必须原样保留
+        generateService.startGenerate(periodId, 1L);
+
+        assertThat(itemAmount("E001", "POST_ALLOW")).isEqualByComparingTo("1500.00");
+        assertThat(jdbc.queryForObject("""
+                SELECT i.source FROM pay_record_item i
+                  JOIN pay_record r ON r.id = i.record_id
+                 WHERE r.period_id = ? AND r.emp_no = 'E001' AND i.item_code = 'POST_ALLOW'
+                """, String.class, periodId)).isEqualTo("IMPORT");
+    }
+
+    @Test
     void 同一文件二次上传返回409() throws Exception {
         byte[] bytes = buildFile("FIXED",
                 new Object[][]{{"E001", "员工1", 1500}});
@@ -246,13 +264,15 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
-    void DEPT范围可以导入本部门记录() throws Exception {
+    void DEPT用户不能操作未锁定期间的导入() throws Exception {
+        // 编制中的数据对部门主管不可见（A2）：导入自然也一并拒绝
         CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
                 Set.of("payroll:import:submit", "payroll:record:view"), "DEPT", null));
 
-        ImportValidateResultDTO result = importService.validate(
-                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null);
-        assertThat(result.failRows()).isZero();
+        assertThatThrownBy(() -> importService.validate(
+                fixedFile(new Object[][]{{"E001", "员工1", 1500}}), periodId, "FIXED", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("无权");
     }
 
     @Test
