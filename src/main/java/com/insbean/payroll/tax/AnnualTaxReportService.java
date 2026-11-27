@@ -7,6 +7,9 @@ import com.insbean.payroll.domain.entity.SysDeptEntity;
 import com.insbean.payroll.employee.mapper.EmployeeMapper;
 import com.insbean.payroll.org.mapper.DeptMapper;
 import com.insbean.payroll.record.mapper.PayRecordItemMapper;
+import com.insbean.payroll.report.dto.AnnualTaxReportResult;
+import com.insbean.payroll.report.mapper.ReportMapper;
+import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.tax.dto.AnnualTaxRow;
 import com.insbean.payroll.tax.mapper.PayYtdMapper;
@@ -34,18 +37,20 @@ public class AnnualTaxReportService {
     private final PayRecordItemMapper recordItemMapper;
     private final DeptMapper deptMapper;
     private final DataScopeEnforcer dataScope;
+    private final ReportMapper reportMapper;
 
     public AnnualTaxReportService(EmployeeMapper employeeMapper, PayYtdMapper ytdMapper,
                                   PayRecordItemMapper recordItemMapper, DeptMapper deptMapper,
-                                  DataScopeEnforcer dataScope) {
+                                  DataScopeEnforcer dataScope, ReportMapper reportMapper) {
         this.employeeMapper = employeeMapper;
         this.ytdMapper = ytdMapper;
         this.recordItemMapper = recordItemMapper;
         this.deptMapper = deptMapper;
         this.dataScope = dataScope;
+        this.reportMapper = reportMapper;
     }
 
-    public List<AnnualTaxRow> annualTax(String year, List<Long> employeeIds, Long deptId) {
+    public AnnualTaxReportResult annualTax(String year, List<Long> employeeIds, Long deptId) {
         if (year == null || !year.matches(YEAR_PATTERN)) {
             throw new BizException(400, "year 格式必须为 YYYY：" + year);
         }
@@ -62,14 +67,14 @@ public class AnnualTaxReportService {
         dataScope.applyEmployeeFilter(query);
         List<EmpEmployeeEntity> employees = employeeMapper.selectList(query);
         if (employees.isEmpty()) {
-            return List.of();
+            return new AnnualTaxReportResult(List.of(), excludedPeriods(year));
         }
         List<Long> ids = employees.stream().map(EmpEmployeeEntity::getId).toList();
         Map<Long, PayYtdEntity> ytdByEmployee = ytdMapper
                 .listByYearAndEmployees(Integer.parseInt(year), ids).stream()
                 .collect(Collectors.toMap(PayYtdEntity::getEmployeeId, y -> y, (a, b) -> a));
         if (ytdByEmployee.isEmpty()) {
-            return List.of();
+            return new AnnualTaxReportResult(List.of(), excludedPeriods(year));
         }
 
         Map<String, BigDecimal> lastTax = new LinkedHashMap<>();
@@ -106,7 +111,15 @@ public class AnnualTaxReportService {
                     deptNames.get(employee.getDeptId()), paidMonths, income, basic, social, fund,
                     special, TaxService.round2(taxable), cumTax, last, rate));
         }
-        return rows;
+        return new AnnualTaxReportResult(rows, excludedPeriods(year));
+    }
+
+    /** 该年度内"有核算明细但未锁定"的月份，与其它报表口径一致。 */
+    private List<String> excludedPeriods(String year) {
+        CurrentUser current = CurrentUser.get();
+        Long scopeCompany = current != null && DataScopeEnforcer.ALL.equals(current.dataScope())
+                ? null : (current == null ? null : current.companyId());
+        return reportMapper.excludedPeriods(year + "-01", year + "-12", scopeCompany);
     }
 
     private Map<Long, String> deptNames(List<EmpEmployeeEntity> employees) {

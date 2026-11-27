@@ -496,6 +496,25 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 年度个税核对响应结构与报表一致() throws Exception {
+        lockedPayroll();
+        long editing = periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(editing, 1L);
+
+        String reviewer = login("hr02");
+        JsonNode body = getJson("/api/v1/reports/annual-tax", reviewer, "year", "2026");
+        assertThat(body.path("code").asInt()).isZero();
+        // 与 monthly/annual 同一结构：data 是对象且含 rows / excludedPeriods
+        assertThat(body.path("data").isObject()).isTrue();
+        assertThat(body.path("data").has("rows")).isTrue();
+        assertThat(body.path("data").has("excludedPeriods")).isTrue();
+        assertThat(body.path("data").path("rows").size()).isEqualTo(1);
+        assertThat(body.path("data").path("excludedPeriods").get(0).asText())
+                .isEqualTo("2026-12");
+    }
+
+    @Test
     void 报表查询与导出走真实HTTP() throws Exception {
         long periodId = lockedPayroll();
         // 另建一个有明细但未锁定的期间，报表必须显式列出它而不是静默漏掉

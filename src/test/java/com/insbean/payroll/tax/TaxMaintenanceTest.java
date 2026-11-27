@@ -120,7 +120,7 @@ class TaxMaintenanceTest extends AbstractDbTest {
             periodService.lock(periodId, 2L);
         }
 
-        List<AnnualTaxRow> rows = annualTaxReportService.annualTax("2026", null, null);
+        List<AnnualTaxRow> rows = annualTaxReportService.annualTax("2026", null, null).rows();
         assertThat(rows).hasSize(1);
         AnnualTaxRow row = rows.get(0);
         assertThat(row.empNo()).isEqualTo("E300");
@@ -143,10 +143,10 @@ class TaxMaintenanceTest extends AbstractDbTest {
         // 数据范围：SELF 只能看到自己
         CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
                 Set.of("payroll:record:view"), "SELF", empId));
-        assertThat(annualTaxReportService.annualTax("2026", null, null)).hasSize(1);
+        assertThat(annualTaxReportService.annualTax("2026", null, null).rows()).hasSize(1);
         CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
                 Set.of("payroll:record:view"), "SELF", 999L));
-        assertThat(annualTaxReportService.annualTax("2026", null, null)).isEmpty();
+        assertThat(annualTaxReportService.annualTax("2026", null, null).rows()).isEmpty();
     }
 
     @Test

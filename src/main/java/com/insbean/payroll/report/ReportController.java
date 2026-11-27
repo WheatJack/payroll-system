@@ -5,7 +5,7 @@ import com.insbean.payroll.report.dto.ExportRequest;
 import com.insbean.payroll.report.dto.ReportQuery;
 import com.insbean.payroll.security.RequirePerm;
 import com.insbean.payroll.tax.AnnualTaxReportService;
-import com.insbean.payroll.tax.dto.AnnualTaxRow;
+import com.insbean.payroll.report.dto.AnnualTaxReportResult;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,7 +58,7 @@ public class ReportController {
     /** 年度个税核对：台账累计与逐月结果的逐人对照。 */
     @RequirePerm("payroll:record:view")
     @GetMapping("/annual-tax")
-    public Result<List<AnnualTaxRow>> annualTax(@RequestParam String year,
+    public Result<AnnualTaxReportResult> annualTax(@RequestParam String year,
                                                 @RequestParam(required = false) Long employeeId,
                                                 @RequestParam(required = false) Long deptId) {
         return Result.ok(annualTaxReportService.annualTax(year,

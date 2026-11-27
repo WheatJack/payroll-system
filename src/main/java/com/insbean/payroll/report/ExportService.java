@@ -148,7 +148,7 @@ public class ExportService {
                     throw new BizException(400, "year 必填且格式为 YYYY");
                 }
                 List<AnnualTaxRow> rows = annualTaxReportService.annualTax(
-                        params.year(), params.employeeIds(), params.deptId());
+                        params.year(), params.employeeIds(), params.deptId()).rows();
                 dataRows = rows.size();
                 sheets = List.of(annualTaxSheet(rows));
                 filename = "annual-tax-" + params.year() + "-" + stamp + ".xlsx";
