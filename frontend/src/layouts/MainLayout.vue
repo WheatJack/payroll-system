@@ -30,6 +30,7 @@ const menus = computed<MenuEntry[]>(() => {
     { path: '/system/roles', title: '角色与授权', perm: 'sys:role:view' },
     { path: '/system/depts', title: '部门管理', perm: 'sys:dept:edit' },
     { path: '/system/companies', title: '法人主体', perm: 'sys:company:edit' },
+    { path: '/system/config', title: '系统参数', perm: 'sys:config:view' },
   ].filter((menu) => auth.has(menu.perm))
 
   if (systemChildren.length > 0) {

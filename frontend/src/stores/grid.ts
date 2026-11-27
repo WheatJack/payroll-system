@@ -15,6 +15,7 @@ import { eq, round } from '@/utils/money'
 export interface GridFilter {
   deptId?: string
   employeeType?: EmployeeType
+  jobLevel?: string
   keyword?: string
 }
 
@@ -151,6 +152,7 @@ export const useGridStore = defineStore('grid', () => {
     return rows.value.filter((row) => {
       if (current.deptId && row.deptId !== current.deptId) return false
       if (current.employeeType && row.employeeType !== current.employeeType) return false
+      if (current.jobLevel && row.jobLevel !== current.jobLevel) return false
       if (current.keyword) {
         const keyword = current.keyword.trim().toLowerCase()
         if (!row.empNo.toLowerCase().includes(keyword) && !row.empName.toLowerCase().includes(keyword)) {
@@ -166,6 +168,15 @@ export const useGridStore = defineStore('grid', () => {
   )
   const dirtyRowCount = computed(() => Object.keys(dirty.value).length)
   const hasChanges = computed(() => dirtyCount.value > 0)
+
+  /** 当前表格里出现过的职级，供筛选下拉使用（不写死职级字典）。 */
+  const jobLevelOptions = computed(() => {
+    const levels = new Set<string>()
+    for (const row of rows.value) {
+      if (row.jobLevel) levels.add(row.jobLevel)
+    }
+    return [...levels].sort()
+  })
 
   /** 组装 changeset：每个有改动的行一条 change，带原始 version。 */
   function buildRequest(): ChangesetRequest {
@@ -227,6 +238,7 @@ export const useGridStore = defineStore('grid', () => {
     saving,
     rowIndex,
     editableColumns,
+    jobLevelOptions,
     visibleRows,
     dirtyCount,
     dirtyRowCount,

@@ -181,6 +181,14 @@ onMounted(() => {
       class="list-error"
     />
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" class="list-error" />
+    <el-alert
+      v-if="!loading && !loadError && rows.length === 0"
+      title="仅统计已锁定（LOCKED）与已归档期间；所选期间尚未锁定时为空属正常"
+      type="info"
+      show-icon
+      :closable="false"
+      class="list-error"
+    />
 
     <el-table
       v-loading="loading"

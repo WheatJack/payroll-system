@@ -85,6 +85,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/system/CompanyListView.vue'),
         meta: { title: '法人主体', perm: 'sys:company:edit' },
       },
+      {
+        path: 'system/config',
+        name: 'system-config',
+        component: () => import('@/views/system/ConfigView.vue'),
+        meta: { title: '系统参数', perm: 'sys:config:view' },
+      },
       // 开发专用：vxe-table PoC 只在 dev 注册，生产环境不存在该路由
       ...(import.meta.env.DEV
         ? [

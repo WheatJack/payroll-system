@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest'
-import { buildAnnualParams, buildMonthlyParams, buildPayslipParams, buildPeriodSheetParams } from '../export'
+import {
+  buildAnnualParams,
+  buildMonthlyParams,
+  buildPayslipParams,
+  buildPeriodSheetParams,
+  payslipExportBlockedReason,
+} from '../export'
 
 describe('导出参数构造', () => {
   test('月度：只带非空可选字段', () => {
@@ -30,5 +36,12 @@ describe('导出参数构造', () => {
   test('序列化后不出现 undefined 字段', () => {
     const json = JSON.stringify(buildPeriodSheetParams('2026-11'))
     expect(json).toBe('{"periodYm":"2026-11"}')
+  })
+
+  test('工资条 0 人时必须禁止导出（省略 employeeIds 会被后端当成「全部人员」）', () => {
+    expect(payslipExportBlockedReason(0)).toContain('没有员工')
+    expect(payslipExportBlockedReason(0)).toContain('至少一人')
+    expect(payslipExportBlockedReason(1)).toBeNull()
+    expect(payslipExportBlockedReason(20)).toBeNull()
   })
 })

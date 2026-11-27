@@ -170,6 +170,39 @@ describe('grid store 的 dirty 与筛选解耦', () => {
     expect(request.changes[0].items[0].amount).toBe('2000.00')
   })
 
+  test('按职级筛选只影响可见行，且职级选项来自数据', () => {
+    const store = useGridStore()
+    const baseRow = {
+      version: 0,
+      employeeId: '1',
+      empName: '张三',
+      deptId: '1',
+      deptName: '北京研发部',
+      employeeType: 'REGULAR' as const,
+      seniorityYears: '6.00',
+      grossAmount: '0.00',
+      deductionAmount: '0.00',
+      netAmount: '0.00',
+      items: {},
+    }
+    store.load({
+      period: { id: '3', periodYm: '2026-11', status: 'EDITING' },
+      columns: [],
+      rows: [
+        { ...baseRow, recordId: '101', empNo: 'E001', jobLevel: 'P6' },
+        { ...baseRow, recordId: '102', empNo: 'E002', jobLevel: 'P5' },
+      ],
+      total: 2,
+    })
+    expect(store.jobLevelOptions).toEqual(['P5', 'P6'])
+
+    store.setFilter({ jobLevel: 'P6' })
+    expect(store.visibleRows.map((row) => row.empNo)).toEqual(['E001'])
+
+    store.clearFilter()
+    expect(store.visibleRows).toHaveLength(2)
+  })
+
   test('applySaveResult 用服务端返回行刷新版本号并清掉已保存的 dirty', () => {
     const store = useGridStore()
     store.load({

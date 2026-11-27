@@ -1,4 +1,5 @@
 import { HttpResponse, http, delay } from 'msw'
+import type { SystemConfig } from '@/api/config'
 import type {
   ChangesetRequest,
   ChangesetResult,
@@ -32,6 +33,7 @@ import {
   ANNUAL_REPORT_ROWS,
   COMPANIES,
   COMP_PROFILES,
+  CONFIGS,
   DEMO_TOKEN,
   DEMO_TOKENS,
   DEMO_USER,
@@ -79,6 +81,35 @@ function hasPermission(request: Request, code: string): boolean {
   return currentUserOf(request)?.permissions.includes(code) ?? false
 }
 
+/**
+ * 系统参数的 mock 持久化：放到 sessionStorage，整页刷新后仍保持（等价于「读后端」）。
+ * 仅 mock 使用，真实环境数据来自 sys_config 表。
+ * 注意：必须定义在 `state` 之前——`state` 初始化时会同步调用 loadPersistedConfigs()，
+ * 否则 const 的 TDZ 会让读取直接抛 ReferenceError。
+ */
+const CONFIG_STORAGE_KEY = 'payroll.mock.configs'
+
+function loadPersistedConfigs(): SystemConfig[] {
+  try {
+    const raw = sessionStorage.getItem(CONFIG_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as SystemConfig[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch {
+    // 存储不可用或 mock 缓存损坏时退回种子数据
+  }
+  return clone(CONFIGS)
+}
+
+function persistConfigs(): void {
+  try {
+    sessionStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(state.configs))
+  } catch {
+    // 忽略存储不可用
+  }
+}
+
 const state = {
   employees: clone(EMPLOYEES),
   idNos: { ...EMPLOYEE_ID_NOS },
@@ -90,6 +121,7 @@ const state = {
   depts: clone(DEPTS),
   users: clone(USERS),
   roles: clone(ROLES),
+  configs: loadPersistedConfigs(),
   runs: new Map<string, { startedAt: number }>(),
   nextEmployeeId: EMPLOYEES.length + 1,
   nextProfileId: COMP_PROFILES.length + 1,
@@ -625,7 +657,10 @@ export const handlers = [
     const file = form.get('file')
     const periodId = form.get('periodId')
     const bizType = form.get('bizType')
+    const importMode = form.get('importMode')
     if (!(file instanceof File) || !periodId || !bizType) return fail(400, 'file、periodId、bizType 必填')
+    // APPEND 已下线：与后端保持一致，直接 400
+    if (importMode === 'APPEND') return fail(400, 'APPEND 模式已下线，请使用 UPSERT 或 INSERT_ONLY')
     if (importState.committedFileNames.has(file.name)) {
       return fail(409, '同一文件已提交过，请勿重复导入')
     }
@@ -768,6 +803,29 @@ export const handlers = [
   }),
 
   /* ------------------------------ 系统管理 ------------------------------ */
+
+  /* ------------------------------ 系统参数 ------------------------------ */
+
+  http.get(`${API}/configs`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'sys:config:view')) return fail(403, '无权限执行该操作')
+    return ok(state.configs)
+  }),
+
+  http.put(`${API}/configs/:key`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'sys:config:edit')) return fail(403, '无权限执行该操作')
+    const config = state.configs.find((item: SystemConfig) => item.key === params.key)
+    if (!config) return fail(400, '参数不存在')
+    if (!config.editable) return fail(409, '该参数由系统维护，只读')
+    const body = (await request.json()) as { value?: unknown }
+    if (typeof body?.value !== 'string') return fail(400, 'value 必须是字符串')
+    config.value = body.value
+    persistConfigs()
+    return ok(config)
+  }),
 
   http.get(`${API}/permissions`, ({ request }) => {
     const denied = requireAuth(request)

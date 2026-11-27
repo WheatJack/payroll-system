@@ -24,7 +24,7 @@ import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
 import { sumMoneyColumn } from '@/utils/report'
-import { buildPayslipParams, buildPeriodSheetParams } from '@/utils/export'
+import { buildPayslipParams, buildPeriodSheetParams, payslipExportBlockedReason } from '@/utils/export'
 import { parseClipboardMatrix } from '@/utils/paste'
 
 const route = useRoute()
@@ -55,10 +55,21 @@ const editable = computed(() => periodStatus.value === 'EDITING' && canSavePermi
 /* ------------------------------ 导出 ------------------------------ */
 
 const exporting = ref<'' | 'sheet' | 'payslip'>('')
+/** 只有已锁定/已归档的工资表才允许导出（后端也只统计这些状态）。 */
+const exportReady = computed<boolean>(() => periodStatus.value === 'LOCKED' || periodStatus.value === 'ARCHIVED')
+const exportBlockedReason = computed<string | null>(() =>
+  exportReady.value ? null : '工资表锁定后才能导出（当前状态：' + statusMeta.value.label + '）',
+)
+/** 0 人时不发请求：省略 employeeIds 会被后端当作「导出全部人员」。 */
+const payslipBlockedReason = computed(() => payslipExportBlockedReason(store.visibleRows.length))
 
 /** 期间完整工资表（含全部工资项列）。 */
 async function exportPeriodSheet() {
   if (!store.period) return
+  if (!exportReady.value) {
+    ElMessage.warning(exportBlockedReason.value ?? '工资表锁定后才能导出')
+    return
+  }
   exporting.value = 'sheet'
   try {
     const file = await reportApi.exportReport(
@@ -81,7 +92,17 @@ async function exportPeriodSheet() {
 /** 工资条：按当前可见行（筛选后）导出，一个人或一批人。 */
 async function exportPayslip() {
   if (!store.period) return
+  if (!exportReady.value) {
+    ElMessage.warning(exportBlockedReason.value ?? '工资表锁定后才能导出')
+    return
+  }
   const employeeIds = store.visibleRows.map((row) => row.employeeId)
+  // 0 人必须拦住：契约里「不传 employeeIds」= 按数据范围导出全部人员
+  const blocked = payslipExportBlockedReason(employeeIds.length)
+  if (blocked) {
+    ElMessage.warning(blocked)
+    return
+  }
   exporting.value = 'payslip'
   try {
     const file = await reportApi.exportReport(
@@ -401,6 +422,15 @@ onBeforeUnmount(() => {
           <el-option value="OUTSOURCE" label="外包" />
           <el-option value="REHIRE" label="返聘" />
         </el-select>
+        <el-select
+          :model-value="store.filter.jobLevel"
+          clearable
+          placeholder="职级"
+          style="width: 110px"
+          @update:model-value="(value: string) => store.setFilter({ jobLevel: value || undefined })"
+        >
+          <el-option v-for="level in store.jobLevelOptions" :key="level" :value="level" :label="level" />
+        </el-select>
         <el-input
           :model-value="store.filter.keyword"
           placeholder="工号/姓名"
@@ -419,10 +449,24 @@ onBeforeUnmount(() => {
           </template>
           <el-tag v-else type="success" size="small">无未保存修改</el-tag>
         </span>
-        <el-button v-if="canExport" :icon="Download" :loading="exporting === 'sheet'" @click="exportPeriodSheet">
+        <el-button
+          v-if="canExport"
+          :icon="Download"
+          :disabled="!exportReady"
+          :title="exportBlockedReason ?? ''"
+          :loading="exporting === 'sheet'"
+          @click="exportPeriodSheet"
+        >
           导出工资表
         </el-button>
-        <el-button v-if="canExport" :icon="Download" :loading="exporting === 'payslip'" @click="exportPayslip">
+        <el-button
+          v-if="canExport"
+          :icon="Download"
+          :disabled="!exportReady || store.visibleRows.length === 0"
+          :title="exportBlockedReason ?? payslipBlockedReason ?? ''"
+          :loading="exporting === 'payslip'"
+          @click="exportPayslip"
+        >
           导出工资条（{{ store.visibleRows.length }} 人）
         </el-button>
         <el-button type="primary" :disabled="!editable || !store.hasChanges" :loading="saving" @click="save">

@@ -8,6 +8,7 @@ import { isApiError } from '@/api/client'
 import type { Employee, EmployeeType } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, type DeptNode } from '@/utils/labels'
+import { employeeDeptLabel, employeeSeniority } from '@/utils/employee'
 import EmployeeFormDialog from './EmployeeFormDialog.vue'
 import CompProfilePanel from './CompProfilePanel.vue'
 
@@ -161,13 +162,20 @@ onMounted(() => {
       <el-table-column label="性别" width="70">
         <template #default="{ row }">{{ genderLabel(row.gender) }}</template>
       </el-table-column>
-      <el-table-column prop="deptId" label="部门ID" width="90" />
+      <el-table-column label="部门" min-width="140">
+        <template #default="{ row }">{{ employeeDeptLabel(row) }}</template>
+      </el-table-column>
       <el-table-column label="员工类型" width="100">
         <template #default="{ row }">{{ employeeTypeLabel(row.employeeType) }}</template>
       </el-table-column>
       <el-table-column prop="jobLevel" label="职级" width="80" />
       <el-table-column prop="positionName" label="岗位" min-width="120" show-overflow-tooltip />
       <el-table-column prop="hireDate" label="入职日期" width="110" />
+      <el-table-column label="工龄" width="90" align="right">
+        <template #default="{ row }">
+          <span class="amount-cell">{{ employeeSeniority(row) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="idNoMask" label="证件号" width="130">
         <template #default="{ row }">
           <span class="masked">{{ row.idNoMask }}</span>

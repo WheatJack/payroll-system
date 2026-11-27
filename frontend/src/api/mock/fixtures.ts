@@ -5,6 +5,7 @@
  * 其余端点按 `docs/api/openapi.yaml` 的 schema 构造最小可用数据。
  */
 import gridExampleRaw from './fixtures/grid-response.json?raw'
+import type { SystemConfig } from '@/api/config'
 import type {
   Company,
   CompProfile,
@@ -53,6 +54,8 @@ export const DEMO_USER: CurrentUser = {
     'sys:role:grant:all',
     'sys:dept:edit',
     'sys:company:edit',
+    'sys:config:view',
+    'sys:config:edit',
   ],
 }
 
@@ -85,7 +88,10 @@ export const DEPTS: Dept[] = [
   { id: '10', companyId: '2', parentId: '0', deptCode: 'SHFIN', deptName: '上海财务部', ancestors: ',0,', sortNo: 10, status: 1 },
 ]
 
-export const EMPLOYEES: Employee[] = [
+/** mock 人员：后端正在给 EmployeeDTO 补工龄字段，这里先带上用于界面展示 */
+type MockEmployee = Employee & { seniorityYears?: string; socialSeniorityYears?: string }
+
+export const EMPLOYEES: MockEmployee[] = [
   {
     id: '1',
     companyId: '1',
@@ -102,6 +108,8 @@ export const EMPLOYEES: Employee[] = [
     deptName: '北京研发部',
     hireDate: '2020-03-01',
     workStartDate: '2019-07-01',
+    seniorityYears: '6.00',
+    socialSeniorityYears: '7.40',
     leaveDate: null,
     status: 1,
     remark: null,
@@ -122,6 +130,8 @@ export const EMPLOYEES: Employee[] = [
     deptName: '北京财务部',
     hireDate: '2026-09-01',
     workStartDate: '2026-09-01',
+    seniorityYears: '0.25',
+    socialSeniorityYears: '0.25',
     leaveDate: null,
     status: 1,
     remark: null,
@@ -142,6 +152,8 @@ export const EMPLOYEES: Employee[] = [
     deptName: '研发一组',
     hireDate: '2026-07-01',
     workStartDate: '2026-07-01',
+    seniorityYears: '0.40',
+    socialSeniorityYears: '0.40',
     leaveDate: null,
     status: 1,
     remark: null,
@@ -348,5 +360,46 @@ export const USERS: User[] = [
     roleIds: ['3'],
     permissions: ['payroll:record:view', 'payroll:export'] as Role['permissions'],
     dataScope: 'COMPANY',
+  },
+]
+
+
+/* ------------------------- 系统参数（sys_config） ------------------------- */
+
+export const CONFIGS: SystemConfig[] = [
+  {
+    key: 'STANDARD_WORK_DAYS',
+    value: '21.75',
+    valueType: 'DECIMAL',
+    description: '月计薪天数',
+    editable: true,
+  },
+  {
+    key: 'SENIORITY_PAY_PER_YEAR',
+    value: '50.00',
+    valueType: 'DECIMAL',
+    description: '工龄工资标准（元/年）',
+    editable: true,
+  },
+  {
+    key: 'LATE_GRACE_MINUTES',
+    value: '30',
+    valueType: 'INT',
+    description: '迟到宽限分钟数',
+    editable: true,
+  },
+  {
+    key: 'LEGAL_HOLIDAYS',
+    value: '2026-01-01,2026-02-17,2026-10-01',
+    valueType: 'DATE_LIST',
+    description: '法定节假日（用于计薪天数）',
+    editable: true,
+  },
+  {
+    key: 'PAYSLIP_FOOTER',
+    value: '本公司工资保密，请勿外传',
+    valueType: 'STRING',
+    description: '工资条页脚文案',
+    editable: false,
   },
 ]

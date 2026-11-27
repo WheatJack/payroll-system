@@ -14,9 +14,11 @@ import { Back, Download, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import * as importApi from '@/api/import'
 import { isApiError } from '@/api/client'
 import { saveBlob } from '@/api/download'
-import type { ImportBizType, ImportCommitResult, ImportMode } from '@/api/models'
+import type { ImportBizType, ImportCommitResult } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import {
+  AVAILABLE_IMPORT_MODES,
+  IMPORT_MODE_LABELS,
   IMPORT_POLL_INTERVAL_MS,
   IMPORT_POLL_MAX_ATTEMPTS,
   batchSummary,
@@ -26,6 +28,7 @@ import {
   isTerminalBatchStatus,
   pollExhausted,
   shouldKeepPolling,
+  type AvailableImportMode,
   type ImportBatchView,
 } from '@/utils/import'
 
@@ -38,7 +41,8 @@ const canSubmit = computed(() => auth.has('payroll:import:submit'))
 const canExportErrors = computed(() => auth.has('payroll:export'))
 
 const bizType = ref<ImportBizType>('FIXED')
-const importMode = ref<ImportMode>('UPSERT')
+// APPEND（有则累加）后端已下线：只在界面上提供 UPSERT / INSERT_ONLY
+const importMode = ref<AvailableImportMode>('UPSERT')
 
 const selectedFile = ref<File | null>(null)
 const fileList = ref<UploadFile[]>([])
@@ -329,9 +333,9 @@ onBeforeUnmount(stopPolling)
         <div class="row">
           <span class="label">导入模式</span>
           <el-radio-group v-model="importMode">
-            <el-radio-button value="UPSERT">有则覆盖</el-radio-button>
-            <el-radio-button value="APPEND">有则累加</el-radio-button>
-            <el-radio-button value="INSERT_ONLY">有则跳过</el-radio-button>
+            <el-radio-button v-for="mode in AVAILABLE_IMPORT_MODES" :key="mode" :value="mode">
+              {{ IMPORT_MODE_LABELS[mode] }}
+            </el-radio-button>
           </el-radio-group>
           <el-button type="primary" :loading="validating" :disabled="!canSubmit" @click="validate">开始预校验</el-button>
         </div>

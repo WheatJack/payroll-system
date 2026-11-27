@@ -6,6 +6,7 @@ import * as employeeApi from '@/api/employee'
 import { isApiError } from '@/api/client'
 import type { Employee, EmployeeCreateRequest, EmployeeType, EmployeeUpdateRequest } from '@/api/models'
 import type { DeptNode } from '@/utils/labels'
+import { employeeSeniority, employeeSocialSeniority } from '@/utils/employee'
 
 const props = defineProps<{
   modelValue: boolean
@@ -269,6 +270,22 @@ async function submit() {
             <el-date-picker v-model="form.hireDate" type="date" value-format="YYYY-MM-DD" class="full-width" />
           </el-form-item>
         </el-col>
+        <el-col v-if="isEdit" :span="12">
+          <el-form-item label="工龄">
+            <div class="readonly-value">
+              {{ employee ? employeeSeniority(employee) : '—' }} 年
+              <span class="field-hint inline">按入职日期计算，只读</span>
+            </div>
+          </el-form-item>
+        </el-col>
+        <el-col v-if="isEdit" :span="12">
+          <el-form-item label="社会工龄">
+            <div class="readonly-value">
+              {{ employee ? employeeSocialSeniority(employee) : '—' }} 年
+              <span class="field-hint inline">按参加工作时间计算，只读</span>
+            </div>
+          </el-form-item>
+        </el-col>
         <el-col :span="12">
           <el-form-item label="参加工作" prop="workStartDate">
             <el-date-picker
@@ -321,5 +338,14 @@ async function submit() {
   color: #909399;
   line-height: 18px;
   margin-top: 2px;
+}
+.field-hint.inline {
+  margin-left: 6px;
+  margin-top: 0;
+}
+.readonly-value {
+  font-size: 14px;
+  color: #303133;
+  font-variant-numeric: tabular-nums;
 }
 </style>

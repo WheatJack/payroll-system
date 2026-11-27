@@ -4,7 +4,24 @@
  * 关键约束：`failRows > 0` 时**禁止提交**——后端会返回 409 且 `data.failRows` 给出数量，
  * 前端要在按钮上就置灰并说明原因，不能等用户点了才报错。
  */
-import type { ImportBatchStatus, ImportValidateResult } from '@/api/models'
+import type { ImportBatchStatus, ImportMode, ImportValidateResult } from '@/api/models'
+
+/**
+ * 导入模式里**可用的**选项。
+ * `APPEND`（有则累加）后端已下线，选它必然 400，因此不在界面上提供。
+ */
+export const AVAILABLE_IMPORT_MODES = ['UPSERT', 'INSERT_ONLY'] as const
+export type AvailableImportMode = (typeof AVAILABLE_IMPORT_MODES)[number]
+
+export const IMPORT_MODE_LABELS: Record<AvailableImportMode, string> = {
+  UPSERT: '有则覆盖',
+  INSERT_ONLY: '有则跳过',
+}
+
+/** 防御性判断：历史上可能有人传 APPEND。 */
+export function isAvailableImportMode(mode: ImportMode | string): mode is AvailableImportMode {
+  return (AVAILABLE_IMPORT_MODES as readonly string[]).includes(mode)
+}
 
 export type ImportBatchView = Pick<
   ImportValidateResult,

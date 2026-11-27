@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import {
+  AVAILABLE_IMPORT_MODES,
+  IMPORT_MODE_LABELS,
+  isAvailableImportMode,
   batchSummary,
   canCommit,
   commitBlockedReason,
@@ -57,6 +60,20 @@ describe('导入批次能否提交', () => {
     expect(batchSummary(batch({ totalRows: 12, successRows: 10, failRows: 2 }))).toBe(
       '共 12 行：成功 10 行，失败 2 行',
     )
+  })
+})
+
+describe('导入模式（APPEND 已下线）', () => {
+  test('界面只提供 UPSERT / INSERT_ONLY', () => {
+    expect(AVAILABLE_IMPORT_MODES).toEqual(['UPSERT', 'INSERT_ONLY'])
+    expect(IMPORT_MODE_LABELS.UPSERT).toBe('有则覆盖')
+    expect(IMPORT_MODE_LABELS.INSERT_ONLY).toBe('有则跳过')
+  })
+
+  test('APPEND 被判定为不可用（后端已下线，选了必然 400）', () => {
+    expect(isAvailableImportMode('APPEND')).toBe(false)
+    expect(isAvailableImportMode('UPSERT')).toBe(true)
+    expect(isAvailableImportMode('INSERT_ONLY')).toBe(true)
   })
 })
 

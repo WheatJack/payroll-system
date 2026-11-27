@@ -37,3 +37,17 @@ export function buildPeriodSheetParams(periodYm: string, deptId?: string): Repor
 export function buildPayslipParams(periodYm: string, employeeIds: readonly string[]): ReportExportParams {
   return { periodYm, ...(employeeIds.length > 0 ? { employeeIds: [...employeeIds] } : {}) }
 }
+
+/**
+ * 工资条导出的前置校验。
+ *
+ * 注意：契约里「不传 employeeIds」表示按数据范围导出**全部**可见人员，
+ * 所以 0 人时绝不能靠省略参数来表达「零」——必须直接禁止导出，
+ * 否则用户以为导出了 0 人，实际拿到全公司工资条。
+ */
+export function payslipExportBlockedReason(employeeCount: number): string | null {
+  if (employeeCount <= 0) {
+    return '当前筛选下没有员工，请先筛选出至少一人再导出工资条'
+  }
+  return null
+}
