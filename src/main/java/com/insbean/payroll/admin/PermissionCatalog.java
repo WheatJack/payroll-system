@@ -22,6 +22,7 @@ public final class PermissionCatalog {
             new PermissionItemDTO("payroll:period:unlock", "解锁期间", "PAYROLL"),
             new PermissionItemDTO("payroll:import:submit", "导入工资数据", "PAYROLL"),
             new PermissionItemDTO("payroll:export", "导出报表", "PAYROLL"),
+            new PermissionItemDTO("payroll:sensitive:view", "查看敏感字段", "PAYROLL"),
             new PermissionItemDTO("sys:user:view", "查看用户", "SYS"),
             new PermissionItemDTO("sys:user:edit", "编辑用户", "SYS"),
             new PermissionItemDTO("sys:role:view", "查看角色", "SYS"),

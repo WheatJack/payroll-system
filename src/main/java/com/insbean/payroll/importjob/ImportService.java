@@ -557,7 +557,9 @@ public class ImportService {
 
     private ImportBatchEntity requireBatch(Long batchId) {
         ImportBatchEntity batch = batchMapper.selectById(batchId);
-        if (batch == null) {
+        // 人员导入批次（period_id 哨兵 0 / bizType=EMPLOYEE）不属于工资导入接口
+        if (batch == null || "EMPLOYEE".equals(batch.getBizType())
+                || Long.valueOf(0L).equals(batch.getPeriodId())) {
             throw new BizException(404, "导入批次不存在");
         }
         return batch;

@@ -160,7 +160,7 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(users.path("data").path("total").asInt()).isEqualTo(3);
 
         JsonNode permissions = getJson("/api/v1/permissions", admin);
-        assertThat(permissions.path("data").size()).isEqualTo(15);
+        assertThat(permissions.path("data").size()).isEqualTo(16);
 
         JsonNode roles = getJson("/api/v1/roles", admin);
         assertThat(roles.path("data").size()).isGreaterThanOrEqualTo(4);
@@ -441,6 +441,58 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(mvc.perform(get("/api/v1/periods/" + editing + "/grid")
                         .header("Authorization", "Bearer " + lead))
                 .andReturn().getResponse().getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    void 人员批量导入走真实HTTP() throws Exception {
+        String token = login("hr01");
+
+        MvcResult template = mvc.perform(get("/api/v1/import/employee-template")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(template.getResponse().getStatus()).isEqualTo(200);
+        assertThat(template.getResponse().getContentType()).startsWith(XLSX);
+        assertThat(template.getResponse().getContentAsByteArray()).startsWith(new byte[]{'P', 'K'});
+
+        MvcResult validated = mvc.perform(multipart("/api/v1/import/employees/validate")
+                        .file(new MockMultipartFile("file", "employees.xlsx", XLSX,
+                                employeeXlsx("HX001", "批量张三")))
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(validated.getResponse().getStatus()).isEqualTo(200);
+        JsonNode body = objectMapper.readTree(body(validated));
+        assertThat(body.path("data").path("successRows").asInt()).isEqualTo(1);
+        String batchId = body.path("data").path("batchId").asText();
+
+        MvcResult committed = mvc.perform(post("/api/v1/import/employees/" + batchId + "/commit")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(committed.getResponse().getStatus()).isEqualTo(200);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employee WHERE emp_no = 'HX001'", Integer.class))
+                .isEqualTo(1);
+    }
+
+    private static byte[] employeeXlsx(String empNo, String name) throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("employees");
+            String[] headers = {"工号", "姓名", "性别", "员工类型", "证件类型", "证件号码", "手机号",
+                    "部门编码", "职级", "岗位", "入职日期", "参加工作时间", "基本工资"};
+            Row header = sheet.createRow(0);
+            for (int i = 0; i < headers.length; i++) {
+                header.createCell(i).setCellValue(headers[i]);
+            }
+            String[] values = {empNo, name, "男", "REGULAR", "ID_CARD",
+                    "110101199001017777", "13800138000", "D001", "P6", "工程师",
+                    "2025-01-01", "2018-07-01", "8000.00"};
+            Row row = sheet.createRow(1);
+            for (int i = 0; i < values.length; i++) {
+                row.createCell(i).setCellValue(values[i]);
+            }
+            workbook.write(out);
+            return out.toByteArray();
+        }
     }
 
     @Test

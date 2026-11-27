@@ -95,6 +95,7 @@ public class TestDb {
                 INSERT INTO sys_role_grant (role_id, perm_code) VALUES
                   (1, 'payroll:record:view'), (1, 'payroll:record:edit'),
                   (1, 'payroll:import:submit'), (1, 'payroll:export'),
+                  (1, 'payroll:sensitive:view'),
                   (2, 'payroll:record:view'), (2, 'payroll:period:lock'), (2, 'payroll:period:unlock'), (2, 'payroll:export'),
                   (3, 'payroll:record:view'),
                   (4, 'sys:user:view'), (4, 'sys:user:edit'),

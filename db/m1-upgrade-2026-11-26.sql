@@ -146,3 +146,9 @@ ALTER TABLE emp_comp_profile
 -- 18) pay_record.period_ym 索引（集团级跨期间查询）
 ALTER TABLE pay_record
   ADD KEY idx_period_ym (period_ym);
+
+-- 19) 薪酬专员补 payroll:sensitive:view（证件号按需查看接口的唯一权限入口）
+INSERT IGNORE INTO sys_role_grant (role_id, perm_code)
+SELECT r.id, 'payroll:sensitive:view'
+  FROM sys_role r
+ WHERE r.company_id = 1 AND r.role_code = 'PAYROLL_CLERK' AND r.deleted = 0;

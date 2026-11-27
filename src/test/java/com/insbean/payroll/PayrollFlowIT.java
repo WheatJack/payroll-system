@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -40,6 +41,9 @@ class PayrollFlowIT extends AbstractDbTest {
 
     @Autowired
     private MockMvc mvc;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -177,6 +181,36 @@ class PayrollFlowIT extends AbstractDbTest {
         assertThat(users.path("total").isNumber()).isTrue();
         assertThat(users.path("current").isNumber()).isTrue();
         assertThat(users.path("size").isNumber()).isTrue();
+    }
+
+    @Test
+    void 证件号明文按权限查看并写审计() throws Exception {
+        String clerk = login("hr01");
+        long empId = createEmployee(clerk, "E001", ID_NO);
+
+        // 薪酬专员持有 payroll:sensitive:view
+        JsonNode sensitive = getJson("/api/v1/employees/" + empId + "/sensitive", clerk);
+        assertThat(sensitive.path("idNo").asText()).isEqualTo(ID_NO);
+        assertThat(sensitive.path("mobile").asText()).isEqualTo("13800138000");
+
+        Map<String, Object> audit = jdbc.queryForMap("""
+                SELECT action, old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'EMPLOYEE' AND biz_id = ? AND action = 'VIEW_SENSITIVE'
+                 ORDER BY id DESC LIMIT 1
+                """, empId);
+        assertThat(audit.get("action")).isEqualTo("VIEW_SENSITIVE");
+        assertThat(audit.get("old_value")).isNull();
+        assertThat(audit.get("new_value")).isNull();
+        // 审计里绝不能出现明文
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_audit_log WHERE new_value LIKE ? OR old_value LIKE ?",
+                Integer.class, "%" + ID_NO + "%", "%" + ID_NO + "%")).isZero();
+
+        // 复核岗没有该权限 → 403
+        String reviewer = login("hr02");
+        assertThat(mvc.perform(get("/api/v1/employees/" + empId + "/sensitive")
+                        .header("Authorization", "Bearer " + reviewer))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
     }
 
     private String login(String username) throws Exception {

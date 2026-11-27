@@ -5,6 +5,7 @@ import com.insbean.payroll.employee.dto.EmployeeDTO;
 import com.insbean.payroll.employee.dto.EmployeePageDTO;
 import com.insbean.payroll.employee.dto.EmployeeQuery;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
+import com.insbean.payroll.employee.dto.EmployeeSensitiveDTO;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.RequirePerm;
 import jakarta.validation.Valid;
@@ -50,6 +51,13 @@ public class EmployeeController {
     @GetMapping("/{id}")
     public Result<EmployeeDTO> get(@PathVariable Long id) {
         return Result.ok(employeeService.get(id));
+    }
+
+    /** 明文只在专用接口返回；需要 payroll:sensitive:view，且每次调用写审计。 */
+    @RequirePerm("payroll:sensitive:view")
+    @GetMapping("/{id}/sensitive")
+    public Result<EmployeeSensitiveDTO> sensitive(@PathVariable Long id) {
+        return Result.ok(employeeService.sensitive(id));
     }
 
     @RequirePerm("payroll:record:edit")

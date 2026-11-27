@@ -9,6 +9,14 @@ import java.util.List;
 
 public interface DeptMapper extends BaseMapper<SysDeptEntity> {
 
+    @Select("""
+            SELECT * FROM sys_dept
+             WHERE company_id = #{companyId} AND dept_code = #{deptCode} AND deleted = 0
+             LIMIT 1
+            """)
+    com.insbean.payroll.domain.entity.SysDeptEntity findByCode(@Param("companyId") Long companyId,
+                                                               @Param("deptCode") String deptCode);
+
     @Select("SELECT dept_name FROM sys_dept WHERE id = #{id} AND deleted = 0")
     String findNameById(@Param("id") Long id);
 

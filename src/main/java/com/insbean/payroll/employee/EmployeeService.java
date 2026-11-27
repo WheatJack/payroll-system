@@ -11,6 +11,7 @@ import com.insbean.payroll.employee.dto.EmployeeDTO;
 import com.insbean.payroll.employee.dto.EmployeePageDTO;
 import com.insbean.payroll.employee.dto.EmployeeQuery;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
+import com.insbean.payroll.employee.dto.EmployeeSensitiveDTO;
 import com.insbean.payroll.employee.mapper.EmployeeMapper;
 import com.insbean.payroll.employee.mapper.EmploymentMapper;
 import com.insbean.payroll.org.mapper.DeptMapper;
@@ -274,6 +275,19 @@ public class EmployeeService {
             throw new BizException(404, "人员不存在");
         }
         return toDto(entity);
+    }
+
+    /**
+     * 证件号/手机号明文：唯一出口。每次调用都写 VIEW_SENSITIVE 审计，
+     * 审计里只记"谁看了谁"，绝不写明文。
+     */
+    public EmployeeSensitiveDTO sensitive(Long id) {
+        dataScope.assertEmployeeVisible(id);
+        EmpEmployeeEntity entity = requireEmployee(id);
+        String idNo = entity.getIdNoCipher() == null ? null : cryptoService.decrypt(entity.getIdNoCipher());
+        String mobile = entity.getMobileCipher() == null ? null : cryptoService.decrypt(entity.getMobileCipher());
+        auditService.record("EMPLOYEE", id, "VIEW_SENSITIVE", null, null, null);
+        return new EmployeeSensitiveDTO(idNo, mobile);
     }
 
     public EmployeePageDTO page(EmployeeQuery query, Long companyId) {
