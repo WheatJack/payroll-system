@@ -31,7 +31,7 @@ public class TestDb {
 
     private static final List<String> TABLES = List.of(
             "emp_comp_profile_item", "emp_comp_profile", "emp_employment", "emp_employee",
-            "pay_record_item", "pay_record", "pay_run", "pay_period",
+            "pay_record_item", "pay_record", "pay_run_skip", "pay_run", "pay_period",
             "pay_import_error", "pay_import_batch", "pay_audit_log", "sys_config",
             "pay_item", "sys_user_role", "sys_role_grant", "sys_role", "sys_user",
             "sys_dept", "sys_company");

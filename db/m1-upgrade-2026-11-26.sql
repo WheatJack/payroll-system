@@ -113,3 +113,15 @@ SELECT r.id, 'payroll:period:unlock'
 --    分批生成时部分员工失败：run 记 FAILED，期间上留失败人数供前端提示。
 ALTER TABLE pay_period
   ADD COLUMN last_run_fail_count INT NOT NULL DEFAULT 0 COMMENT '上次生成失败人数' AFTER employee_count;
+
+-- 15) pay_run_skip：保留完整跳过明细
+--    pay_run.error_msg 有 64KB 上限且会截断，HR 关掉弹窗后无法回看"跳过了谁"。
+CREATE TABLE IF NOT EXISTS pay_run_skip (
+  id       BIGINT       NOT NULL AUTO_INCREMENT,
+  run_id   BIGINT       NOT NULL,
+  emp_no   VARCHAR(32)  NOT NULL,
+  emp_name VARCHAR(64)  NULL,
+  reason   VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_run (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='生成跳过明细';

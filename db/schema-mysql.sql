@@ -286,6 +286,17 @@ CREATE TABLE pay_run (
   KEY idx_period (period_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='核算批次';
 
+-- 生成跳过的明细（可回看/导出）：pay_run.error_msg 会截断，不能作为审计依据
+CREATE TABLE pay_run_skip (
+  id       BIGINT       NOT NULL AUTO_INCREMENT,
+  run_id   BIGINT       NOT NULL,
+  emp_no   VARCHAR(32)  NOT NULL,
+  emp_name VARCHAR(64)  NULL,
+  reason   VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_run (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='生成跳过明细';
+
 CREATE TABLE pay_record (
   id                   BIGINT        NOT NULL AUTO_INCREMENT,
   period_id            BIGINT        NOT NULL,

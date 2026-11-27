@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.text.Normalizer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,7 +59,7 @@ public class ImportValidator {
     }
 
     /** 记录是否在当前用户的数据范围内；存在但不可见必须 403，而不是伪装成"没有记录"。 */
-    private record RecordRef(Long id, boolean visible) {
+    private record RecordRef(Long id, String empName, boolean visible) {
     }
 
     public record ValidatedRow(int rowNo, Long recordId, Map<String, BigDecimal> amounts) {
@@ -257,6 +258,14 @@ public class ImportValidator {
             if (!recordRef.visible()) {
                 throw new BizException(403, "无权导入该人员的核算记录：" + empNo);
             }
+            // 工号对但姓名不符 = 改错人的钱，必须逐行拦截
+            String fileName = trim(data.get(indexOf(KEY_EMP_NAME)));
+            if (!fileName.isEmpty() && !sameName(fileName, recordRef.empName())) {
+                addError(excelRow, TITLE_EMP_NAME, fileName, "NAME_MISMATCH",
+                        "第 " + excelRow + " 行：工号 " + empNo + " 对应「"
+                                + recordRef.empName() + "」，与文件中的「" + fileName + "」不符");
+                return;
+            }
             Long recordId = recordRef.id();
 
             Map<String, BigDecimal> amounts = new LinkedHashMap<>();
@@ -354,7 +363,7 @@ public class ImportValidator {
      */
     private Map<String, RecordRef> recordByEmpNo(Long periodId, Long companyId) {
         List<PayRecordEntity> records = recordMapper.selectList(Wrappers.<PayRecordEntity>lambdaQuery()
-                .select(PayRecordEntity::getId, PayRecordEntity::getEmpNo)
+                .select(PayRecordEntity::getId, PayRecordEntity::getEmpNo, PayRecordEntity::getEmpName)
                 .eq(PayRecordEntity::getPeriodId, periodId)
                 .eq(PayRecordEntity::getCompanyId, companyId)
                 .eq(PayRecordEntity::getDeleted, 0));
@@ -371,7 +380,7 @@ public class ImportValidator {
 
         Map<String, RecordRef> result = new HashMap<>();
         for (PayRecordEntity record : records) {
-            result.put(record.getEmpNo(), new RecordRef(record.getId(),
+            result.put(record.getEmpNo(), new RecordRef(record.getId(), record.getEmpName(),
                     visibleIds.contains(record.getId())));
         }
         return result;
@@ -379,6 +388,22 @@ public class ImportValidator {
 
     private static String trim(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    /**
+     * 姓名比对：忽略空格（含全角空格）与全角/半角差异。
+     * 只做 NFKC + 去空白，不做同音/繁简归一——那会引入"看起来一样就放行"的风险。
+     */
+    static boolean sameName(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return normalizeName(left).equals(normalizeName(right));
+    }
+
+    private static String normalizeName(String value) {
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC);
+        return normalized.replaceAll("\\s+", "").replace("\u3000", "");
     }
 
     /** 供测试与错误信息使用：导入类型 → 工资项类别。 */

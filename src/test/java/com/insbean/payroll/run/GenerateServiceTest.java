@@ -499,6 +499,21 @@ class GenerateServiceTest extends AbstractDbTest {
         assertThat(generateService.progress(run2).warnings()).isEmpty();
     }
 
+    @Test
+    void 跳过明细可从批次完整回看() {
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+
+        RunProgressDTO progress = generateService.progress(runId);
+        // E999 未配置薪酬档案 → 跳过；明细落 pay_run_skip，可随时回看
+        assertThat(progress.skippedDetails()).anySatisfy(d -> {
+            assertThat(d.empNo()).isEqualTo("E999");
+            assertThat(d.empName()).isEqualTo("员工E999");
+            assertThat(d.reason()).contains("未配置薪酬档案");
+        });
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_run_skip WHERE run_id = ?", Integer.class, runId)).isPositive();
+    }
+
     private String itemSource(Long recordId, String itemCode) {
         return jdbc.queryForObject("""
                 SELECT source FROM pay_record_item WHERE record_id = ? AND item_code = ?

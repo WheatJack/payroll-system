@@ -12,6 +12,8 @@ public record RunProgressDTO(
         List<RunErrorDTO> errors,
         Map<String, String> skipped,
         /** 非致命警告（如"节假日未配置但存在不足月折算"），不影响批次状态。 */
-        List<String> warnings
+        List<String> warnings,
+        /** 完整跳过明细（来自 pay_run_skip，不受 progress JSON 截断影响）。 */
+        List<RunSkipDetail> skippedDetails
 ) {
 }

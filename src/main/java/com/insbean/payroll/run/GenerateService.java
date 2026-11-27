@@ -34,9 +34,11 @@ import com.insbean.payroll.security.DataScopeEnforcer;
 import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
+import com.insbean.payroll.run.dto.RunSkipDetail;
 import com.insbean.payroll.record.mapper.PayRecordItemMapper;
 import com.insbean.payroll.record.mapper.PayRecordMapper;
 import com.insbean.payroll.run.mapper.PayRunMapper;
+import com.insbean.payroll.run.mapper.RunSkipMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -103,6 +105,7 @@ public class GenerateService {
     private final PayRecordMapper recordMapper;
     private final PayRecordItemMapper recordItemMapper;
     private final PayRunMapper runMapper;
+    private final RunSkipMapper runSkipMapper;
     private final RecordAssembler recordAssembler;
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
@@ -123,6 +126,7 @@ public class GenerateService {
                            PayRecordMapper recordMapper,
                            PayRecordItemMapper recordItemMapper,
                            PayRunMapper runMapper,
+                           RunSkipMapper runSkipMapper,
                            RecordAssembler recordAssembler,
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
@@ -140,6 +144,7 @@ public class GenerateService {
         this.recordMapper = recordMapper;
         this.recordItemMapper = recordItemMapper;
         this.runMapper = runMapper;
+        this.runSkipMapper = runSkipMapper;
         this.recordAssembler = recordAssembler;
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
@@ -172,6 +177,7 @@ public class GenerateService {
             // 部分员工失败不能报 SUCCESS：HR 会据此直接锁定，把漏算的人永久留在外面
             String runStatus = progress.failed > 0 ? "FAILED" : "SUCCESS";
             closeRun(run, runStatus, progress);
+            persistSkips(run.getId(), progress);
             periodService.markEditing(periodId, operatorId);
             markRunFailureCount(periodId, progress.failed);
             // 回写人数/合计 + 生成时的列快照（导出用，不能取当前启用科目）
@@ -190,6 +196,7 @@ public class GenerateService {
             // 将来真改异步后，前端只能靠轮询拿到原因。
             progress.failure = e.getMessage();
             closeRun(run, "FAILED", progress);
+            persistSkips(run.getId(), progress);
             markRunFailureCount(periodId, progress.failed);
             throw e;
         } finally {
@@ -211,8 +218,15 @@ public class GenerateService {
             errors.add(new RunErrorDTO("", progress.failure));
         }
         errors.addAll(progress.errors);
+        List<RunSkipDetail> skippedDetails = runSkipMapper.selectList(
+                        Wrappers.<PayRunSkipEntity>lambdaQuery()
+                                .eq(PayRunSkipEntity::getRunId, runId)
+                                .orderByAsc(PayRunSkipEntity::getId))
+                .stream()
+                .map(e -> new RunSkipDetail(e.getEmpNo(), e.getEmpName(), e.getReason()))
+                .toList();
         return new RunProgressDTO(run.getStatus(), progress.total, progress.success,
-                progress.failed, errors, progress.skipped, progress.warnings);
+                progress.failed, errors, progress.skipped, progress.warnings, skippedDetails);
     }
 
     // ------------------------------------------------------------------ 生成主流程
@@ -282,12 +296,12 @@ public class GenerateService {
         for (EmpEmployeeEntity emp : batch) {
             // 离职却没有离职日期：不臆造日期去改钱，直接跳过并给出可操作的原因
             if (emp.getStatus() != null && emp.getStatus() == 2 && emp.getLeaveDate() == null) {
-                progress.skipped.put(emp.getEmpNo(), SKIP_LEAVE_DATE_MISSING);
+                progress.skip(emp, SKIP_LEAVE_DATE_MISSING);
                 continue;
             }
             CompProfileDTO profile = compProfileService.effectiveAt(emp.getId(), periodEnd);
             if (profile == null) {
-                progress.skipped.put(emp.getEmpNo(), SKIP_NO_PROFILE);
+                progress.skip(emp, SKIP_NO_PROFILE);
                 continue;
             }
 
@@ -477,6 +491,22 @@ public class GenerateService {
         return workingDays.between(from, to, holidays);
     }
 
+    private void persistSkips(Long runId, Progress progress) {
+        try {
+            runSkipMapper.deleteByRun(runId);
+            for (RunSkipDetail detail : progress.skipDetails) {
+                PayRunSkipEntity entity = new PayRunSkipEntity();
+                entity.setRunId(runId);
+                entity.setEmpNo(detail.empNo());
+                entity.setEmpName(detail.empName());
+                entity.setReason(detail.reason());
+                runSkipMapper.insert(entity);
+            }
+        } catch (RuntimeException e) {
+            log.warn("跳过明细持久化失败: {}", e.getMessage());
+        }
+    }
+
     /** 把上次生成失败人数写到期间上，前端在期间列表即可看到"有 N 人没算"。 */
     private void markRunFailureCount(Long periodId, int failed) {
         try {
@@ -601,5 +631,12 @@ public class GenerateService {
         /** 本期发生不足月折算的人数（用于节假日未配置的警告）。 */
         int prorated;
         List<String> warnings = new ArrayList<>();
+        /** 完整跳过明细（persistSkips 用；不进 progress JSON）。 */
+        List<RunSkipDetail> skipDetails = new ArrayList<>();
+
+        void skip(EmpEmployeeEntity emp, String reason) {
+            skipped.put(emp.getEmpNo(), reason);
+            skipDetails.add(new RunSkipDetail(emp.getEmpNo(), emp.getName(), reason));
+        }
     }
 }

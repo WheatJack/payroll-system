@@ -266,6 +266,41 @@ class ExportServiceTest extends AbstractDbTest {
         assertThat(audit).contains("rows=0");
     }
 
+    @Test
+    void 工资条所选员工全部无效返回400() {
+        login(exportPerms());
+        assertThatThrownBy(() -> exportService.export(new ExportRequest(
+                "PAYSLIP",
+                new ReportExportParams("2026-11", null, null, null, null, List.of(999999L)),
+                "XLSX")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+    }
+
+    @Test
+    void 工资条部分员工无效时导出有效行并记审计() throws Exception {
+        Long empId = jdbc.queryForObject(
+                "SELECT employee_id FROM pay_record WHERE period_id = ?", Long.class, periodId);
+        login(exportPerms());
+
+        PreparedExport prepared = exportService.export(new ExportRequest(
+                "PAYSLIP",
+                new ReportExportParams("2026-11", null, null, null, null, List.of(empId, 999999L)),
+                "XLSX"));
+        try (InputStream in = Files.newInputStream(prepared.path());
+             XSSFWorkbook workbook = new XSSFWorkbook(in)) {
+            assertThat(workbook.getSheetAt(0).getLastRowNum()).isEqualTo(1);
+            assertThat(workbook.getSheetAt(0).getRow(1).getCell(0).getStringCellValue()).isEqualTo("E001");
+        } finally {
+            Files.deleteIfExists(prepared.path());
+        }
+        String audit = jdbc.queryForObject("""
+                SELECT new_value FROM pay_audit_log WHERE biz_type = 'EXPORT'
+                 ORDER BY id DESC LIMIT 1
+                """, String.class);
+        assertThat(audit).contains("invalidEmployeeIds=1").contains("rows=1");
+    }
+
     // ------------------------------------------------------------------ 工具
 
     private ExportRequest monthly() {

@@ -162,8 +162,8 @@ class EmployeeServiceTest extends AbstractDbTest {
     void 通过修改接口改部门也走追加区间() {
         Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
 
-        service.update(id, new EmployeeSaveReq(null, null, null, null, null, null, null,
-                null, null, null, TestDb.DEPT_BEIJING, null, null, null, null, null));
+        service.update(id, new EmployeeSaveReq(TestDb.COMPANY_BEIJING, null, null, null, null,
+                null, null, null, null, null, TestDb.DEPT_BEIJING, null, null, null, null, null));
 
         Integer rows = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM emp_employment WHERE employee_id = ?", Integer.class, id);
@@ -204,6 +204,19 @@ class EmployeeServiceTest extends AbstractDbTest {
                 SELECT COUNT(*) FROM pay_audit_log
                  WHERE biz_type = 'EMPLOYEE' AND biz_id = ? AND action = 'CREATE'
                 """, Integer.class, id)).isEqualTo(1);
+    }
+
+    @Test
+    void 员工不能挂在其他主体的部门下() {
+        assertThatThrownBy(() -> service.create(new EmployeeSaveReq(
+                null, "E009", "张三", 1, "ID_CARD", "110101199001019999", null,
+                "REGULAR", "P6", "工程师", TestDb.DEPT_SHANGHAI,
+                LocalDate.of(2020, 3, 1), null, null, 1, null), TestDb.COMPANY_DEFAULT))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("部门")
+                .extracting("code").isEqualTo(400);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM emp_employee WHERE emp_no = 'E009'", Integer.class)).isZero();
     }
 
     private EmployeeSaveReq createReq(String empNo, String idNo) {

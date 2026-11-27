@@ -373,6 +373,30 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 工号对但姓名不符时预校验失败并指出行号() throws Exception {
+        byte[] wrongName = buildFileRaw(List.of("工号", "姓名", "岗位津贴"),
+                List.of("empNo", "empName", "POST_ALLOW"),
+                new Object[][]{{"E001", "张三", 1500}});
+        ImportValidateResultDTO result = importService.validate(
+                new MockMultipartFile("file", "name.xlsx", XLSX, wrongName), periodId, "FIXED", null);
+
+        assertThat(result.failRows()).isEqualTo(1);
+        assertThat(result.errors()).singleElement().satisfies(e -> {
+            assertThat(e.errorCode()).isEqualTo("NAME_MISMATCH");
+            assertThat(e.errorMsg()).contains("第 3 行").contains("E001")
+                    .contains("员工1").contains("张三");
+        });
+
+        // 空格与全角/半角差异不算不一致
+        byte[] spaced = buildFileRaw(List.of("工号", "姓名", "岗位津贴"),
+                List.of("empNo", "empName", "POST_ALLOW"),
+                new Object[][]{{"E001", " 员 工 1 ", 1500}});
+        ImportValidateResultDTO ok = importService.validate(
+                new MockMultipartFile("file", "name-ok.xlsx", XLSX, spaced), periodId, "FIXED", null);
+        assertThat(ok.failRows()).isZero();
+    }
+
+    @Test
     void 缺工号列时提示缺工号而不是别的列() throws Exception {
         byte[] bad = buildFileRaw(List.of("姓名", "基本工资"),
                 List.of("empName", "BASE_SALARY"), new Object[][]{{"员工1", 1}});

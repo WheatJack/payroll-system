@@ -143,16 +143,16 @@ public class ExportService {
                 PeriodData periodData = periodSheets(params);
                 sheets = periodData.sheets();
                 dataRows = periodData.rows();
+                description = describe(type, params) + periodData.extraAudit();
                 filename = "period-sheet-" + params.periodYm() + "-" + stamp + ".xlsx";
-                description = describe(type, params);
             }
             case "PAYSLIP" -> {
                 requirePeriodYm(params);
                 PeriodData periodData = payslipSheets(params);
                 sheets = periodData.sheets();
                 dataRows = periodData.rows();
+                description = describe(type, params) + periodData.extraAudit();
                 filename = "payslip-" + params.periodYm() + "-" + stamp + ".xlsx";
-                description = describe(type, params);
             }
             default -> throw new BizException(400, "不支持的报表类型：" + request.reportType());
         }
@@ -247,7 +247,7 @@ public class ExportService {
         assertPeriodLocked(params.periodYm());
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), null);
         if (records.isEmpty()) {
-            return new PeriodData(List.of(emptyPaySheet("工资表-" + params.periodYm())), 0);
+            return new PeriodData(List.of(emptyPaySheet("工资表-" + params.periodYm())), 0, "");
         }
         Map<Long, List<PayRecordEntity>> byCompany = records.stream()
                 .collect(Collectors.groupingBy(PayRecordEntity::getCompanyId, TreeMap::new, Collectors.toList()));
@@ -260,11 +260,11 @@ public class ExportService {
             sheets.add(paySheet(sheetName("工资表", companyId, params.periodYm()),
                     itemColumns, companyRecords, items));
         });
-        return new PeriodData(sheets, records.size());
+        return new PeriodData(sheets, records.size(), "");
     }
 
     /** sheets + 业务数据行数（审计用；说明行不计入）。 */
-    private record PeriodData(List<ExcelWriter.SheetData> sheets, long rows) {
+    private record PeriodData(List<ExcelWriter.SheetData> sheets, long rows, String extraAudit) {
     }
 
     private ExcelWriter.SheetData emptyPaySheet(String name) {
@@ -286,8 +286,16 @@ public class ExportService {
         List<Long> employeeIds = params.employeeIds();
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), employeeIds);
         if (records.isEmpty()) {
-            return new PeriodData(List.of(emptyPaySheet("工资条-" + params.periodYm())), 0);
+            // 指定了人却一个都没匹配到：不能返回空表让用户以为导出成功
+            if (employeeIds != null && !employeeIds.isEmpty()) {
+                throw new BizException(400, "所选员工在该期间没有工资记录");
+            }
+            return new PeriodData(List.of(emptyPaySheet("工资条-" + params.periodYm())), 0, "");
         }
+        long invalidEmployeeIds = employeeIds == null ? 0 : employeeIds.stream()
+                .distinct()
+                .filter(id -> records.stream().noneMatch(r -> id.equals(r.getEmployeeId())))
+                .count();
         Map<Long, Map<String, BigDecimal>> items = itemAmounts(records);
 
         // 工资条跨主体时列取并集（同名列只出现一次），保证每行都对齐
@@ -299,7 +307,8 @@ public class ExportService {
                         .forEach(c -> union.putIfAbsent(c.itemCode(), c)));
 
         return new PeriodData(List.of(paySheet("工资条-" + params.periodYm(),
-                new ArrayList<>(union.values()), records, items)), records.size());
+                new ArrayList<>(union.values()), records, items)), records.size(),
+                invalidEmployeeIds > 0 ? ";invalidEmployeeIds=" + invalidEmployeeIds : "");
     }
 
     // ------------------------------------------------------------------ 共用

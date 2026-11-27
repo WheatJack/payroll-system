@@ -570,7 +570,8 @@ class SystemOpsFlowIT extends AbstractDbTest {
             keys.createCell(2).setCellValue("POST_ALLOW");
             Row data = sheet.createRow(2);
             data.createCell(0).setCellValue(empNo);
-            data.createCell(1).setCellValue("员工");
+            // 姓名必须与记录快照一致（导入会校验工号↔姓名）
+            data.createCell(1).setCellValue("员工" + empNo);
             data.createCell(2).setCellValue(amount);
             workbook.write(out);
             return out.toByteArray();
