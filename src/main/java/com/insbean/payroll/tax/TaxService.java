@@ -107,23 +107,6 @@ public class TaxService {
     }
 
     /**
-     * 本年度已发月份数（含本期）：中途入职从入职月起算，不是从 1 月起算。
-     */
-    public int monthsInYear(String periodYm, LocalDate hireDate) {
-        YearMonth ym = YearMonth.parse(periodYm);
-        int month = ym.getMonthValue();
-        int start;
-        if (hireDate == null || hireDate.getYear() < ym.getYear()) {
-            start = 1;
-        } else if (hireDate.getYear() > ym.getYear()) {
-            start = month;
-        } else {
-            start = Math.min(hireDate.getMonthValue(), month);
-        }
-        return Math.max(1, month - start + 1);
-    }
-
-    /**
      * 累计预扣法：
      * taxable = 累计收入 − months×5000 − 累计社保 − 累计公积金 − 累计专项附加；
      * 本期 = max(累计应纳税额 − 累计已预扣, 0)。

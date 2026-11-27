@@ -106,6 +106,10 @@ class DataScopeEnforcerTest extends AbstractDbTest {
                 SELECT gross_amount FROM pay_record
                  WHERE period_id = ? AND emp_no = 'E001' AND deleted = 0
                 """, BigDecimal.class, periodId);
+        BigDecimal ownNet = jdbc.queryForObject("""
+                SELECT net_amount FROM pay_record
+                 WHERE period_id = ? AND emp_no = 'E001' AND deleted = 0
+                """, BigDecimal.class, periodId);
         BigDecimal companyGross = jdbc.queryForObject("""
                 SELECT SUM(gross_amount) FROM pay_record
                  WHERE period_id = ? AND company_id = ? AND deleted = 0
@@ -114,7 +118,7 @@ class DataScopeEnforcerTest extends AbstractDbTest {
         asUser("SELF", selfEmployee, TestDb.DEPT_DEFAULT);
         PeriodDTO self = periodService.get(periodId);
         assertThat(self.totalGross()).isEqualByComparingTo(ownGross);
-        assertThat(self.totalNet()).isEqualByComparingTo(ownGross);
+        assertThat(self.totalNet()).isEqualByComparingTo(ownNet);
         assertThat(self.employeeCount()).isEqualTo(1);
         // 绝不能等于全公司合计
         assertThat(self.totalGross()).isNotEqualByComparingTo(companyGross);

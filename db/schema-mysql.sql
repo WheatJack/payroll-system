@@ -494,6 +494,7 @@ CREATE TABLE pay_ytd (
   cum_fund              DECIMAL(18,2) NOT NULL DEFAULT 0,
   cum_special_deduction DECIMAL(18,2) NOT NULL DEFAULT 0,
   cum_tax               DECIMAL(18,2) NOT NULL DEFAULT 0,
+  paid_months           INT           NOT NULL DEFAULT 0 COMMENT '本年度已计薪月份数（不含未锁定期间）',
   last_period_ym        CHAR(7)       NULL,
   updated_at            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

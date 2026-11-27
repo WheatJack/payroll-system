@@ -93,8 +93,9 @@ class RecordServiceTest extends AbstractDbTest {
         assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo(gross.subtract(deduction));
 
         assertThat(gross).isEqualByComparingTo("10600.00");        // 8000 + 600 工龄 + 2000 绩效
-        assertThat(deduction).isEqualByComparingTo("300.00");
-        assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo("10300.00");
+        // 扣款 = 个税 108（首月 8600 的累计预扣）+ 考勤 300
+        assertThat(deduction).isEqualByComparingTo("408.00");
+        assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo("10192.00");
     }
 
     @Test
@@ -174,7 +175,8 @@ class RecordServiceTest extends AbstractDbTest {
         assertThat(row.items().get("BASE_SALARY")).isEqualTo("8000.00");
         assertThat(row.items().get("SENIORITY_PAY")).isEqualTo("600.00");
         assertThat(row.grossAmount()).isEqualTo("8600.00");
-        assertThat(row.deductionAmount()).isEqualTo("0.00");
+        // 首月即按累计预扣算税：(8600-5000)×3% = 108
+        assertThat(row.deductionAmount()).isEqualTo("108.00");
         assertThat(row.seniorityYears()).isEqualTo("6.00");
     }
 
@@ -315,7 +317,7 @@ class RecordServiceTest extends AbstractDbTest {
         GridRow row = recordService.grid(periodId).rows().get(0);
         assertThat(row.items()).containsEntry("NON_GROSS", "500.00");
         assertThat(new BigDecimal(row.grossAmount())).isEqualByComparingTo("8600.00");
-        assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo("8600.00");
+        assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo("8492.00");
     }
 
     @Test

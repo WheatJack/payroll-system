@@ -22,5 +22,7 @@ public class PayYtdEntity {
     private BigDecimal cumFund;
     private BigDecimal cumSpecialDeduction;
     private BigDecimal cumTax;
+    /** 本年度已计薪月份数（不含未锁定期间）；减除费用按它+1 计算。 */
+    private Integer paidMonths;
     private String lastPeriodYm;
 }

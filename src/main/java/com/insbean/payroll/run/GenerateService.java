@@ -393,7 +393,10 @@ public class GenerateService {
                         .add(insurance.fund());
                 BigDecimal cumSpecial = nvl(ytd == null ? null : ytd.getCumSpecialDeduction())
                         .add(special);
-                int months = taxService.monthsInYear(period.getPeriodYm(), emp.getHireDate());
+                // 减除费用按"本年度已计薪月份数 + 本期"，不是日历月份序号：
+                // 年中上线时 9 月首次运行必须按 1 个月扣 5,000，否则全公司个税为 0。
+                int paidMonths = ytd == null || ytd.getPaidMonths() == null ? 0 : ytd.getPaidMonths();
+                int months = paidMonths + 1;
                 BigDecimal tax = taxService.computeTax(months, cumIncome, cumSocial, cumFund,
                         cumSpecial, nvl(ytd == null ? null : ytd.getCumTax()));
                 result = appendDeductions(result, itemDefs, insurance.social(), insurance.fund(), tax);

@@ -183,10 +183,11 @@ class TaxServiceTest extends AbstractDbTest {
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pay_ytd WHERE employee_id = ?", Integer.class, empId))
                 .isEqualTo(2);
-        // 2025-12 months=12 → 应纳税所得额 <=0，税 0
+        // 2025-12 是 2025 年首次运行 → 按 1 个月减除：
+        // 基数取当月 8500：社保 895.50、公积金 1020.00 → 1584.50×3% = 47.54
         assertThat(jdbc.queryForObject(
                 "SELECT cum_tax FROM pay_ytd WHERE employee_id = ? AND tax_year = 2025",
-                BigDecimal.class, empId)).isEqualByComparingTo("0.00");
+                BigDecimal.class, empId)).isEqualByComparingTo("47.54");
         // 2026-01 从 months=1 重新累计；基数取上月（已锁定）平均 8500：
         // 社保 895.50、公积金 1020.00 → 应纳税所得额 1584.50 → 税 47.54
         assertThat(jdbc.queryForObject(
@@ -195,6 +196,98 @@ class TaxServiceTest extends AbstractDbTest {
         assertThat(jdbc.queryForObject(
                 "SELECT cum_income FROM pay_ytd WHERE employee_id = ? AND tax_year = 2026",
                 BigDecimal.class, empId)).isEqualByComparingTo("8500.00");
+    }
+
+    @Test
+    void 首次运行按一个月减除() {
+        // 无社保；2026-09 首次生成 → 减除 5000（不是 9×5000）
+        Long empId = employeeNoInsurance("E200", LocalDate.of(2020, 3, 1));
+        profile(empId, "8000", LocalDate.of(2020, 3, 1));
+        long periodId = periodService.create(
+                new PeriodCreateReq(null, "2026-09"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(periodId, 1L);
+
+        // 应发 8600（8000 + 6 年工龄 600）：(8600−5000)×3% = 108
+        assertThat(itemAmount(periodId, "E200", "TAX")).isEqualByComparingTo("108.00");
+    }
+
+    @Test
+    void 连续三个月累计不是固定值() {
+        Long empId = employeeNoInsurance("E300", LocalDate.of(2021, 1, 1));
+        profile(empId, "29500", LocalDate.of(2021, 1, 1));
+
+        long jan = generateAndLock("2026-01");
+        long feb = generateAndLock("2026-02");
+        long mar = generateAndLock("2026-03");
+
+        // 每月应发 30000：750 / 1730 / 2500（累计预扣进 10% 档）
+        assertThat(itemAmount(jan, "E300", "TAX")).isEqualByComparingTo("750.00");
+        assertThat(itemAmount(feb, "E300", "TAX")).isEqualByComparingTo("1730.00");
+        assertThat(itemAmount(mar, "E300", "TAX")).isEqualByComparingTo("2500.00");
+        assertThat(jdbc.queryForObject(
+                "SELECT cum_tax FROM pay_ytd WHERE employee_id = ? AND tax_year = 2026",
+                BigDecimal.class, empId)).isEqualByComparingTo("4980.00");
+        assertThat(jdbc.queryForObject(
+                "SELECT paid_months FROM pay_ytd WHERE employee_id = ? AND tax_year = 2026",
+                Integer.class, empId)).isEqualTo(3);
+    }
+
+    @Test
+    void 期初数据参与累计() {
+        Long empId = employeeNoInsurance("E400", LocalDate.of(2020, 3, 1));
+        profile(empId, "8000", LocalDate.of(2020, 3, 1));
+        // 年中迁移：1–8 月已在旧系统发薪
+        jdbc.update("""
+                INSERT INTO pay_ytd
+                  (employee_id, tax_year, company_id, cum_income, cum_social, cum_fund,
+                   cum_special_deduction, cum_tax, paid_months, last_period_ym)
+                VALUES (?, 2026, 1, 80000, 0, 0, 0, 1000, 8, '2026-08')
+                """, empId);
+
+        long periodId = periodService.create(
+                new PeriodCreateReq(null, "2026-09"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(periodId, 1L);
+
+        // cumIncome 80000+8600=88600，months=9 → 88600−45000=43600
+        // → 43600×10%−2520 = 1840；已预扣 1000 → 840
+        assertThat(itemAmount(periodId, "E400", "TAX")).isEqualByComparingTo("840.00");
+    }
+
+    @Test
+    void 中途入职按已发月份减除() {
+        Long empId = employeeNoInsurance("E500", LocalDate.of(2026, 5, 1));
+        profile(empId, "8000", LocalDate.of(2026, 5, 1));
+        long periodId = periodService.create(
+                new PeriodCreateReq(null, "2026-09"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(periodId, 1L);
+
+        // 系统 9 月才首次发薪 → 只减 1 个月：8000−5000=3000 → 90
+        assertThat(itemAmount(periodId, "E500", "TAX")).isEqualByComparingTo("90.00");
+    }
+
+    private long generateAndLock(String periodYm) {
+        long periodId = periodService.create(
+                new PeriodCreateReq(null, periodYm), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(periodId, 1L);
+        periodService.lock(periodId, 2L);
+        return periodId;
+    }
+
+    private BigDecimal itemAmount(long periodId, String empNo, String itemCode) {
+        return jdbc.queryForObject("""
+                SELECT i.amount FROM pay_record_item i
+                  JOIN pay_record r ON r.id = i.record_id
+                 WHERE r.period_id = ? AND r.emp_no = ? AND i.item_code = ?
+                """, BigDecimal.class, periodId, empNo, itemCode);
+    }
+
+    /** 不建参保信息（社保/公积金为 0，便于验证纯个税逻辑）。 */
+    private Long employeeNoInsurance(String empNo, LocalDate hireDate) {
+        return employeeService.create(new EmployeeSaveReq(
+                null, empNo, "员工" + empNo, 1, "ID_CARD",
+                "11010119900101" + Math.abs(empNo.hashCode() % 10000), null,
+                "REGULAR", "P6", "工程师", TestDb.DEPT_DEFAULT, hireDate, null, null, 1, null),
+                TestDb.COMPANY_DEFAULT);
     }
 
     // ------------------------------------------------------------------ 工具

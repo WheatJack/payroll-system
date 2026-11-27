@@ -228,3 +228,17 @@ INSERT IGNORE INTO pay_item (company_id, item_code, item_name, category, directi
   (0,'SOCIAL_INS','社保个人','COMPUTED',2,'AMOUNT',2,0,0,0,80,1),
   (0,'HOUSING_FUND','公积金个人','COMPUTED',2,'AMOUNT',2,0,0,0,82,1),
   (0,'TAX','个人所得税','COMPUTED',2,'AMOUNT',2,0,0,0,84,1);
+
+-- 21) pay_ytd.paid_months：减除费用按"本年度已计薪月份数"算，不是日历月份序号。
+--     年中上线时 9 月首次运行若按 9 个月扣 45,000，全公司个税都会是 0。
+ALTER TABLE pay_ytd
+  ADD COLUMN paid_months INT NOT NULL DEFAULT 0 COMMENT '本年度已计薪月份数（不含未锁定期间）'
+  AFTER cum_tax;
+
+-- 期初累计数据（年中迁移场景）：HR/DBA 在上线时初始化一行，生成时在此基础上累加。
+-- 例：某员工 2026 年 1–8 月已在旧系统发薪，累计收入 80,000、社保 9,000、公积金 6,000、
+--     专项附加扣除 12,000、已预扣个税 1,000：
+-- INSERT INTO pay_ytd
+--   (employee_id, tax_year, company_id, cum_income, cum_social, cum_fund,
+--    cum_special_deduction, cum_tax, paid_months, last_period_ym)
+-- VALUES (123, 2026, 1, 80000, 9000, 6000, 12000, 1000, 8, '2026-08');

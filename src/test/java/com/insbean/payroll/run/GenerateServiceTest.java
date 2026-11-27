@@ -178,7 +178,8 @@ class GenerateServiceTest extends AbstractDbTest {
         // 8600 + 6400 = 15000
         assertThat(period.totalGross()).isEqualByComparingTo(gross);
         assertThat(period.totalGross()).isEqualByComparingTo("15000.00");
-        assertThat(period.totalNet()).isEqualByComparingTo("15000.00");
+        // 实发已扣个税：E001 108 + E002 42 = 150
+        assertThat(period.totalNet()).isEqualByComparingTo("14850.00");
     }
 
     @Test

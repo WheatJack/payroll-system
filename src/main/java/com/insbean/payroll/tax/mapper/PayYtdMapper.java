@@ -19,9 +19,9 @@ public interface PayYtdMapper extends BaseMapper<PayYtdEntity> {
     @Insert("""
             INSERT INTO pay_ytd
               (employee_id, tax_year, company_id, cum_income, cum_social, cum_fund,
-               cum_special_deduction, cum_tax, last_period_ym, updated_at)
+               cum_special_deduction, cum_tax, paid_months, last_period_ym, updated_at)
             VALUES (#{employeeId}, #{taxYear}, #{companyId}, #{income}, #{social}, #{fund},
-                    #{special}, #{tax}, #{lastPeriodYm}, NOW())
+                    #{special}, #{tax}, 1, #{lastPeriodYm}, NOW())
             ON DUPLICATE KEY UPDATE
               company_id = VALUES(company_id),
               cum_income = cum_income + VALUES(cum_income),
@@ -29,6 +29,7 @@ public interface PayYtdMapper extends BaseMapper<PayYtdEntity> {
               cum_fund = cum_fund + VALUES(cum_fund),
               cum_special_deduction = cum_special_deduction + VALUES(cum_special_deduction),
               cum_tax = cum_tax + VALUES(cum_tax),
+              paid_months = paid_months + 1,
               last_period_ym = VALUES(last_period_ym),
               updated_at = NOW()
             """)
@@ -50,6 +51,7 @@ public interface PayYtdMapper extends BaseMapper<PayYtdEntity> {
                    cum_fund = GREATEST(cum_fund - #{fund}, 0),
                    cum_special_deduction = GREATEST(cum_special_deduction - #{special}, 0),
                    cum_tax = GREATEST(cum_tax - #{tax}, 0),
+                   paid_months = GREATEST(paid_months - 1, 0),
                    last_period_ym = #{lastPeriodYm},
                    updated_at = NOW()
              WHERE employee_id = #{employeeId} AND tax_year = #{taxYear}
