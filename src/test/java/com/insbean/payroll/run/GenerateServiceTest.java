@@ -9,7 +9,12 @@ import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
+import com.insbean.payroll.record.RecordService;
+import com.insbean.payroll.record.dto.ChangesetChange;
+import com.insbean.payroll.record.dto.ChangesetItem;
+import com.insbean.payroll.record.dto.ChangesetReq;
 import com.insbean.payroll.record.mapper.PayRecordMapper;
+import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +48,12 @@ class GenerateServiceTest extends AbstractDbTest {
 
     @Autowired
     private PayRecordMapper recordMapper;
+
+    @Autowired
+    private RecordService recordService;
+
+    @Autowired
+    private ConfigService configService;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -336,6 +347,92 @@ class GenerateServiceTest extends AbstractDbTest {
         assertThatThrownBy(() -> generateService.progress(999999L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("批次");
+    }
+
+    @Test
+    void 重新生成不改变手工改过的金额() {
+        // 4 位精度变动项 + 可手工编辑的固定项，两者都必须原样保留
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction,
+                                      data_type, precision_scale, include_in_gross, editable,
+                                      importable, sort_no, status)
+                VALUES (0, 'PRECISE', '高精度津贴', 'VARIABLE', 1, 'AMOUNT', 4, 1, 1, 1, 60, 1),
+                       (0, 'FIXED_BONUS', '固定奖金', 'FIXED', 1, 'AMOUNT', 2, 1, 1, 1, 45, 1)
+                """);
+        generateService.startGenerate(periodId, OPERATOR);
+
+        Long recordId = jdbc.queryForObject(
+                "SELECT id FROM pay_record WHERE period_id = ? AND emp_no = 'E001'",
+                Long.class, periodId);
+        int version = jdbc.queryForObject(
+                "SELECT version_no FROM pay_record WHERE id = ?", Integer.class, recordId);
+
+        // 编制台手工改值：4 位金额 1234.5678 + 手工新增的固定项 500
+        recordService.applyChangeset(periodId, new ChangesetReq(List.of(
+                new ChangesetChange(recordId, version, List.of(
+                        new ChangesetItem("PRECISE", "1234.5678"),
+                        new ChangesetItem("FIXED_BONUS", "500.00"))))));
+
+        // 重新生成：系统能算的项重算，手工项必须原样保留
+        generateService.startGenerate(periodId, OPERATOR);
+
+        assertThat(itemAmount("E001", "PRECISE")).isEqualByComparingTo("1234.5678");
+        assertThat(itemAmount("E001", "FIXED_BONUS")).isEqualByComparingTo("500.00");
+        assertThat(itemSource(recordId, "PRECISE")).isEqualTo("MANUAL");
+        assertThat(itemSource(recordId, "FIXED_BONUS")).isEqualTo("MANUAL");
+
+        BigDecimal gross = jdbc.queryForObject(
+                "SELECT gross_amount FROM pay_record WHERE id = ?", BigDecimal.class, recordId);
+        // 8000 + 600 工龄 + 1234.5678 + 500，合计不被二次舍入
+        assertThat(gross).isEqualByComparingTo("10334.5678");
+    }
+
+    @Test
+    void 改工龄单价后同一员工工龄工资翻倍() {
+        configService.update(ConfigService.SENIORITY_PAY_PER_YEAR, "200");
+        generateService.startGenerate(periodId, OPERATOR);
+
+        // E001 入职 2020-03-01，2026-11 期间末 = 6 整年 → 6 × 200 = 1200
+        assertThat(itemAmount("E001", "SENIORITY_PAY")).isEqualByComparingTo("1200.00");
+    }
+
+    @Test
+    void 改月计薪天数后不足月折算分母随之变化() {
+        configService.update(ConfigService.MONTHLY_PAYABLE_DAYS, "30");
+        // 系统参数是"新建期间"的默认值；已有期间保留自己的 hpd（期间级参数优先）
+        long december = periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        assertThat(periodService.get(december).hpd()).isEqualByComparingTo("30");
+
+        Long e100 = createEmployee("E100", "110101199001017777", TestDb.COMPANY_DEFAULT,
+                TestDb.DEPT_DEFAULT, LocalDate.of(2026, 12, 16));
+        compProfileService.save(new CompProfileSaveReq(null, e100, LocalDate.of(2026, 12, 16),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(december, OPERATOR);
+
+        // 12-16..12-31 共 12 个工作日；8000 × 12 / 30 = 3200.00（分母不再是 21.75）
+        assertThat(itemAmountIn(december, "E100", "BASE_SALARY")).isEqualByComparingTo("3200.00");
+    }
+
+    @Test
+    void 配置节假日后该日不再计入工作日() {
+        jdbc.update("UPDATE sys_config SET config_value = '2026-11-02' WHERE config_key = 'payroll.calendar.holidays'");
+        Long e101 = createEmployee("E101", "110101199001018888", TestDb.COMPANY_DEFAULT,
+                TestDb.DEPT_DEFAULT, LocalDate.of(2026, 11, 2));
+        compProfileService.save(new CompProfileSaveReq(null, e101, LocalDate.of(2026, 11, 2),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        generateService.startGenerate(periodId, OPERATOR);
+
+        // 11-02..11-30 原本 21 个工作日，剔除 11-02 后 20 个：8000 × 20 / 21.75 = 7356.32
+        assertThat(itemAmount("E101", "BASE_SALARY")).isEqualByComparingTo("7356.32");
+    }
+
+    private String itemSource(Long recordId, String itemCode) {
+        return jdbc.queryForObject("""
+                SELECT source FROM pay_record_item WHERE record_id = ? AND item_code = ?
+                """, String.class, recordId, itemCode);
     }
 
     private BigDecimal itemAmount(String empNo, String itemCode) {

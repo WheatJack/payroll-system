@@ -47,9 +47,9 @@ class SystemAdminTest extends AbstractDbTest {
     private static final Set<String> FULL_ADMIN_PERMS = Set.of(
             "payroll:record:view", "payroll:record:edit", "payroll:period:lock",
             "payroll:period:unlock", "payroll:import:submit", "payroll:export",
-            "payroll:sensitive:view", "sys:user:view", "sys:user:edit",
+            "sys:user:view", "sys:user:edit",
             "sys:role:view", "sys:role:edit", "sys:role:grant:all",
-            "sys:dept:edit", "sys:company:edit");
+            "sys:dept:edit", "sys:company:edit", "sys:config:view", "sys:config:edit");
 
     @Autowired
     private UserAdminService userAdminService;
@@ -451,9 +451,11 @@ class SystemAdminTest extends AbstractDbTest {
     @Test
     void 权限点目录由后端给出() {
         List<PermissionItemDTO> all = PermissionCatalog.all();
-        assertThat(all).hasSize(14);
+        assertThat(all).hasSize(15);
         assertThat(all).extracting(PermissionItemDTO::code)
-                .contains("payroll:record:view", "sys:user:edit", "sys:role:grant:all");
+                .contains("payroll:record:view", "sys:user:edit", "sys:role:grant:all",
+                        "sys:config:edit")
+                .doesNotContain("payroll:sensitive:view");
         assertThat(all).allSatisfy(p -> {
             assertThat(p.name()).isNotBlank();
             assertThat(p.module()).isIn("PAYROLL", "SYS");

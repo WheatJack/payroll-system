@@ -2,7 +2,9 @@ package com.insbean.payroll.record;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.Money;
 import com.insbean.payroll.common.VersionConflictException;
 import com.insbean.payroll.domain.entity.PayItemEntity;
 import com.insbean.payroll.domain.entity.PayPeriodEntity;
@@ -56,6 +58,7 @@ public class RecordService {
     private final ColumnSnapshotFactory columnSnapshotFactory;
     private final PeriodTotalsRefresher totalsRefresher;
     private final DataScopeEnforcer dataScope;
+    private final AuditService auditService;
 
     public RecordService(PeriodService periodService,
                          ItemService itemService,
@@ -63,7 +66,8 @@ public class RecordService {
                          PayRecordItemMapper recordItemMapper,
                          ColumnSnapshotFactory columnSnapshotFactory,
                          PeriodTotalsRefresher totalsRefresher,
-                         DataScopeEnforcer dataScope) {
+                         DataScopeEnforcer dataScope,
+                         AuditService auditService) {
         this.periodService = periodService;
         this.itemService = itemService;
         this.recordMapper = recordMapper;
@@ -71,6 +75,7 @@ public class RecordService {
         this.columnSnapshotFactory = columnSnapshotFactory;
         this.totalsRefresher = totalsRefresher;
         this.dataScope = dataScope;
+        this.auditService = auditService;
     }
 
     // ------------------------------------------------------------------ grid
@@ -99,6 +104,11 @@ public class RecordService {
         List<GridRow> rows = records.stream()
                 .map(r -> toRow(r, itemsByRecord.getOrDefault(r.getId(), Map.of())))
                 .toList();
+        // 查看工资也要留痕（设计 §4.7）：只记期间与行数，不记每条金额
+        if (!rows.isEmpty()) {
+            auditService.record("RECORD", periodId, "VIEW", "grid", null,
+                    "periodId=" + periodId + ";rows=" + rows.size());
+        }
 
         return new GridResponse(
                 new GridPeriod(period.getId(), period.getPeriodYm(), period.getStatus()),
@@ -154,10 +164,16 @@ public class RecordService {
 
             if (change.items() != null) {
                 for (ChangesetItem item : change.items()) {
-                    applyItem(period, change.recordId(), item);
+                    ItemChange applied = applyItem(period, change.recordId(), item);
+                    // 金额变更逐项留痕：谁在什么时候把哪一格从多少改成了多少
+                    if (applied.isChanged()) {
+                        auditService.record("RECORD", change.recordId(), "UPDATE", item.itemCode(),
+                                applied.oldValue() == null ? null : money(applied.oldValue()),
+                                money(applied.newValue()));
+                    }
                 }
             }
-            recalcTotals(change.recordId());
+            recalcTotals(period, change.recordId());
             touched.add(change.recordId());
         }
 
@@ -174,7 +190,13 @@ public class RecordService {
         return new ChangesetResult(touched.size(), rows);
     }
 
-    private void applyItem(PayPeriodEntity period, Long recordId, ChangesetItem item) {
+    private record ItemChange(BigDecimal oldValue, BigDecimal newValue) {
+        boolean isChanged() {
+            return oldValue == null || oldValue.compareTo(newValue) != 0;
+        }
+    }
+
+    private ItemChange applyItem(PayPeriodEntity period, Long recordId, ChangesetItem item) {
         if (item == null || item.itemCode() == null || item.itemCode().isBlank()) {
             throw new BizException(400, "明细项编码不能为空");
         }
@@ -196,10 +218,11 @@ public class RecordService {
                         .eq(PayRecordItemEntity::getItemCode, item.itemCode())
                         .last("LIMIT 1"));
         if (existing != null) {
+            BigDecimal oldAmount = existing.getAmount();
             existing.setAmount(amount);
             existing.setSource("MANUAL");
             recordItemMapper.updateById(existing);
-            return;
+            return new ItemChange(oldAmount, amount);
         }
 
         PayRecordItemEntity entity = new PayRecordItemEntity();
@@ -212,6 +235,7 @@ public class RecordService {
         entity.setSource("MANUAL");
         entity.setSortNo(def.getSortNo() == null ? 0 : def.getSortNo());
         recordItemMapper.insert(entity);
+        return new ItemChange(null, amount);
     }
 
     /**
@@ -222,9 +246,15 @@ public class RecordService {
      * 抛算术后端 500，并且整批 changeset 回滚。合计就是明细的精确加总，
      * 展示层再按实际有效位数格式化（最少 2 位）。
      */
-    private void recalcTotals(Long recordId) {
+    private void recalcTotals(PayPeriodEntity period, Long recordId) {
         List<PayRecordItemEntity> items = recordItemMapper.findByRecordIds(List.of(recordId));
-        BigDecimal gross = sumByDirection(items, 1);
+        Map<String, Boolean> includeByCode = includeInGross(period);
+        BigDecimal gross = items.stream()
+                .filter(i -> i.getDirection() != null && i.getDirection() == 1)
+                .filter(i -> includeByCode.getOrDefault(i.getItemCode(), true))
+                .map(PayRecordItemEntity::getAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal deduction = sumByDirection(items, 2);
 
         PayRecordEntity update = new PayRecordEntity();
@@ -233,6 +263,16 @@ public class RecordService {
         update.setDeductionAmount(deduction);
         update.setNetAmount(gross.subtract(deduction));
         recordMapper.updateById(update);
+    }
+
+    /**
+     * 科目是否计入应发合计。录入侧必须与计算侧同一口径，否则改一格非应发项
+     * 会让 gross 凭空虚增（领域层忽略了 include_in_gross 的历史问题）。
+     */
+    private Map<String, Boolean> includeInGross(PayPeriodEntity period) {
+        return itemService.list(period.getCompanyId(), null, null).stream()
+                .collect(Collectors.toMap(d -> d.itemCode(),
+                        d -> !Boolean.FALSE.equals(d.includeInGross()), (a, b) -> a));
     }
 
     private static BigDecimal sumByDirection(List<PayRecordItemEntity> items, int direction) {
@@ -264,11 +304,7 @@ public class RecordService {
      * 强制两位会把 4 位小数的明细"吃掉"，导致前端校验「合计 === 明细加总」失败。
      */
     private static String money(BigDecimal value) {
-        if (value == null) {
-            return "0.00";
-        }
-        int effective = Math.max(MONEY_SCALE, Math.max(0, value.stripTrailingZeros().scale()));
-        return value.setScale(effective, RoundingMode.HALF_UP).toPlainString();
+        return Money.format(value);
     }
 
     private static GridRow toRow(PayRecordEntity r, Map<String, String> items) {

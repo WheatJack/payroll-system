@@ -4,5 +4,7 @@ package com.insbean.payroll.domain.payroll;
 public enum PaySource {
     FIXED,
     VARIABLE,
-    COMPUTED
+    COMPUTED,
+    /** 编制台手工修改；重新生成时必须原样保留，不能被计算值覆盖。 */
+    MANUAL
 }

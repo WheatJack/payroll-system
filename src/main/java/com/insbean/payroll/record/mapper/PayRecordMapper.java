@@ -1,11 +1,14 @@
 package com.insbean.payroll.record.mapper;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.toolkit.Constants;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
+import java.util.Map;
 
 public interface PayRecordMapper extends BaseMapper<PayRecordEntity> {
 
@@ -27,6 +30,21 @@ public interface PayRecordMapper extends BaseMapper<PayRecordEntity> {
              FOR UPDATE
             """)
     List<PayRecordEntity> lockByPeriod(@Param("periodId") Long periodId, @Param("companyId") Long companyId);
+
+    /**
+     * 按期间聚合可见记录（人数去重 / 应发 / 实发）。
+     *
+     * <p>期间表上的 total_* 是**全公司**口径；DEPT_SUB / DEPT / SELF 账号直接读会看到
+     * 别人的工资合计。列表与详情都改用它按数据范围重算。
+     */
+    @Select("""
+            SELECT period_id,
+                   COUNT(DISTINCT employee_id) AS employee_count,
+                   SUM(gross_amount)           AS total_gross,
+                   SUM(net_amount)             AS total_net
+              FROM pay_record ${ew.customSqlSegment}
+            """)
+    List<Map<String, Object>> aggregateByPeriod(@Param(Constants.WRAPPER) Wrapper<PayRecordEntity> wrapper);
 
     /** 集团级查重：同一年月该员工是否有有效记录（可能属于任何主体）。 */
     @Select("""

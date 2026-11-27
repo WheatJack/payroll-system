@@ -394,13 +394,30 @@ CREATE TABLE pay_import_error (
 -- 它零写零读，留着只会成为第二个真源；月度/年度汇总改为查询时按 pay_record 聚合。
 
 -- -------------------------------------------------------------
+-- 系统参数
+-- -------------------------------------------------------------
+
+CREATE TABLE sys_config (
+  id           BIGINT       NOT NULL AUTO_INCREMENT,
+  config_key   VARCHAR(64)  NOT NULL,
+  config_value TEXT         NULL,
+  value_type   VARCHAR(16)  NOT NULL DEFAULT 'TEXT' COMMENT 'TEXT/DECIMAL/INT/DATE_LIST',
+  description  VARCHAR(255) NULL,
+  editable     TINYINT      NOT NULL DEFAULT 1 COMMENT '0=只读（运维参数）',
+  updated_by   BIGINT       NULL,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_config_key (config_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统参数（可在线调整的业务规则）';
+
+-- -------------------------------------------------------------
 -- 审计
 -- -------------------------------------------------------------
 
 CREATE TABLE pay_audit_log (
   id            BIGINT       NOT NULL AUTO_INCREMENT,
   company_id    BIGINT       NULL,
-  biz_type      VARCHAR(32)  NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW/REPORT/ROLE/USER/DEPT/COMPANY',
+  biz_type      VARCHAR(32)  NOT NULL COMMENT 'RECORD/PERIOD/EMPLOYEE/IMPORT/EXPORT/VIEW/REPORT/ROLE/USER/DEPT/COMPANY/CONFIG',
   biz_id        BIGINT       NULL,
   action        VARCHAR(32)  NOT NULL COMMENT 'CREATE/UPDATE/DELETE/LOCK/UNLOCK/EXPORT/VIEW/GRANT_REPLACE',
   field_name    VARCHAR(64)  NULL,
@@ -455,4 +472,15 @@ INSERT INTO sys_role_grant (role_id, perm_code) VALUES
 INSERT INTO sys_role_grant (role_id, perm_code) VALUES
   (5, 'sys:user:view'), (5, 'sys:user:edit'),
   (5, 'sys:role:view'), (5, 'sys:role:edit'), (5, 'sys:role:grant:all'),
-  (5, 'sys:dept:edit'), (5, 'sys:company:edit');
+  (5, 'sys:dept:edit'), (5, 'sys:company:edit'),
+  (5, 'sys:config:view'), (5, 'sys:config:edit');
+
+INSERT INTO sys_config (config_key, config_value, value_type, description, editable) VALUES
+  ('payroll.monthly-payable-days', '21.75', 'DECIMAL',
+   '月平均计薪天数：任职不足整月时的折算分母', 1),
+  ('payroll.seniority-pay-per-year', '100', 'DECIMAL',
+   '工龄工资：每满一年金额（元）', 1),
+  ('payroll.calendar.holidays', '', 'DATE_LIST',
+   '法定节假日（逗号分隔 ISO 日期）；为空时回退环境变量 PAYROLL_HOLIDAYS', 1),
+  ('payroll.system-version', '1', 'TEXT',
+   '系统版本号（只读，运维参数）', 0);

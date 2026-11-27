@@ -32,7 +32,7 @@ public class TestDb {
     private static final List<String> TABLES = List.of(
             "emp_comp_profile_item", "emp_comp_profile", "emp_employment", "emp_employee",
             "pay_record_item", "pay_record", "pay_run", "pay_period",
-            "pay_import_error", "pay_import_batch", "pay_audit_log",
+            "pay_import_error", "pay_import_batch", "pay_audit_log", "sys_config",
             "pay_item", "sys_user_role", "sys_role_grant", "sys_role", "sys_user",
             "sys_dept", "sys_company");
 
@@ -99,7 +99,8 @@ public class TestDb {
                   (3, 'payroll:record:view'),
                   (4, 'sys:user:view'), (4, 'sys:user:edit'),
                   (4, 'sys:role:view'), (4, 'sys:role:edit'), (4, 'sys:role:grant:all'),
-                  (4, 'sys:dept:edit'), (4, 'sys:company:edit')
+                  (4, 'sys:dept:edit'), (4, 'sys:company:edit'),
+                  (4, 'sys:config:view'), (4, 'sys:config:edit')
                 """);
 
         String hash = passwordEncoder.encode(PASSWORD);
@@ -111,5 +112,13 @@ public class TestDb {
                 """, hash, hash, hash);
 
         jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (1, 1), (2, 2), (3, 4)");
+
+        jdbc.update("""
+                INSERT INTO sys_config (config_key, config_value, value_type, description, editable) VALUES
+                  ('payroll.monthly-payable-days', '21.75', 'DECIMAL', '月平均计薪天数', 1),
+                  ('payroll.seniority-pay-per-year', '100', 'DECIMAL', '工龄工资每年金额', 1),
+                  ('payroll.calendar.holidays', '', 'DATE_LIST', '法定节假日', 1),
+                  ('payroll.system-version', '1', 'TEXT', '系统版本号（只读）', 0)
+                """);
     }
 }

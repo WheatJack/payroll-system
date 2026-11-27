@@ -3,22 +3,27 @@ package com.insbean.payroll.period;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.Money;
 import com.insbean.payroll.domain.entity.PayPeriodEntity;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
 import com.insbean.payroll.period.dto.PeriodDTO;
+import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.period.mapper.PeriodMapper;
+import com.insbean.payroll.record.mapper.PayRecordMapper;
+import com.insbean.payroll.security.CurrentUser;
+import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工资期间：状态机 + 任务租约。
@@ -38,30 +43,87 @@ public class PeriodService {
     private static final String PERIOD_YM_PATTERN = "^[0-9]{4}-(0[1-9]|1[0-2])$";
 
     private final PeriodMapper periodMapper;
+    private final PayRecordMapper recordMapper;
     private final DataScopeEnforcer dataScope;
     private final AuditService auditService;
+    private final ConfigService configService;
 
-    public PeriodService(PeriodMapper periodMapper, DataScopeEnforcer dataScope, AuditService auditService) {
+    public PeriodService(PeriodMapper periodMapper, PayRecordMapper recordMapper,
+                         DataScopeEnforcer dataScope, AuditService auditService,
+                         ConfigService configService) {
         this.periodMapper = periodMapper;
+        this.recordMapper = recordMapper;
         this.dataScope = dataScope;
         this.auditService = auditService;
+        this.configService = configService;
     }
 
     // ------------------------------------------------------------------ 查询
 
     public PeriodDTO get(Long periodId) {
         dataScope.assertPeriodVisible(periodId);
-        return toDto(requirePeriod(periodId));
+        PayPeriodEntity period = requirePeriod(periodId);
+        return toScopedDto(period, visibleAggregates(List.of(periodId)));
     }
 
     public List<PeriodDTO> list(Long companyId) {
         dataScope.assertCompanyVisible(companyId);
-        return periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
-                        .eq(PayPeriodEntity::getCompanyId, companyId)
-                        .orderByDesc(PayPeriodEntity::getPeriodYm))
-                .stream()
-                .map(PeriodService::toDto)
+        List<PayPeriodEntity> periods = periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
+                .eq(PayPeriodEntity::getCompanyId, companyId)
+                .orderByDesc(PayPeriodEntity::getPeriodYm));
+        Map<Long, PeriodAggregate> aggregates = visibleAggregates(
+                periods.stream().map(PayPeriodEntity::getId).toList());
+        return periods.stream()
+                .map(p -> toScopedDto(p, aggregates))
                 .toList();
+    }
+
+    /**
+     * 非集团/公司范围的账号，期间合计必须按**可见记录**重算。
+     *
+     * <p>pay_period.total_* 是全公司口径，SELF/DEPT/DEPT_SUB 直接下发等于把
+     * 全公司工资合计泄露给普通员工。用一次分组查询算出可见口径，避免逐期间 N+1。
+     */
+    private Map<Long, PeriodAggregate> visibleAggregates(List<Long> periodIds) {
+        CurrentUser current = CurrentUser.get();
+        if (current == null || periodIds.isEmpty()
+                || DataScopeEnforcer.ALL.equals(current.dataScope())
+                || DataScopeEnforcer.COMPANY.equals(current.dataScope())) {
+            return Map.of();
+        }
+        var query = Wrappers.<PayRecordEntity>lambdaQuery()
+                .eq(PayRecordEntity::getDeleted, 0)
+                .in(PayRecordEntity::getPeriodId, periodIds)
+                .groupBy(PayRecordEntity::getPeriodId);
+        dataScope.applyRecordFilter(query);
+        Map<Long, PeriodAggregate> result = new java.util.HashMap<>();
+        for (Map<String, Object> row : recordMapper.aggregateByPeriod(query)) {
+            Long id = Long.valueOf(row.get("period_id").toString());
+            result.put(id, new PeriodAggregate(
+                    Integer.parseInt(row.get("employee_count").toString()),
+                    money(toDecimal(row.get("total_gross"))),
+                    money(toDecimal(row.get("total_net")))));
+        }
+        return result;
+    }
+
+    private record PeriodAggregate(int employeeCount, BigDecimal totalGross, BigDecimal totalNet) {
+    }
+
+    private static BigDecimal toDecimal(Object value) {
+        return value == null ? BigDecimal.ZERO
+                : value instanceof BigDecimal b ? b : new BigDecimal(value.toString());
+    }
+
+    private PeriodDTO toScopedDto(PayPeriodEntity period, Map<Long, PeriodAggregate> aggregates) {
+        PeriodDTO dto = toDto(period);
+        PeriodAggregate aggregate = aggregates.get(period.getId());
+        if (aggregate == null) {
+            return dto;
+        }
+        return new PeriodDTO(dto.id(), dto.companyId(), dto.periodYm(), dto.status(),
+                aggregate.employeeCount(), aggregate.totalGross(), aggregate.totalNet(),
+                dto.hpd(), dto.compiledBy(), dto.lockedBy(), dto.lockedAt(), dto.unlockReason());
     }
 
     public PayPeriodEntity requirePeriod(Long periodId) {
@@ -216,7 +278,11 @@ public class PeriodService {
         entity.setEmployeeCount(0);
         entity.setTotalGross(BigDecimal.ZERO);
         entity.setTotalNet(BigDecimal.ZERO);
-        entity.setHpd(DEFAULT_HPD);
+        // 系统参数作为新期间的默认计薪天数；已有期间保留自己的 hpd（期间级参数优先）
+        BigDecimal configuredHpd = configService.getDecimal(
+                ConfigService.MONTHLY_PAYABLE_DAYS, DEFAULT_HPD);
+        entity.setHpd(configuredHpd != null && configuredHpd.signum() > 0
+                ? configuredHpd : DEFAULT_HPD);
         entity.setVersion(0);
         try {
             periodMapper.insert(entity);
@@ -265,8 +331,6 @@ public class PeriodService {
     }
 
     private static BigDecimal money(BigDecimal value) {
-        return value == null
-                ? new BigDecimal("0.00")
-                : value.setScale(2, RoundingMode.HALF_UP);
+        return Money.scaled(value);
     }
 }

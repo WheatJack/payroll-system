@@ -9,7 +9,12 @@ import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.domain.entity.PayRecordItemEntity;
 import com.insbean.payroll.domain.entity.PayRunEntity;
 import com.insbean.payroll.domain.payroll.EmployeePayContext;
+import com.insbean.payroll.domain.payroll.PayCategory;
+import com.insbean.payroll.domain.payroll.PayDirection;
 import com.insbean.payroll.domain.payroll.PayItemDef;
+import com.insbean.payroll.domain.payroll.PayItemResult;
+import com.insbean.payroll.domain.payroll.PaySource;
+import com.insbean.payroll.domain.payroll.PayrollRules;
 import com.insbean.payroll.domain.payroll.PayrollCalculator;
 import com.insbean.payroll.domain.payroll.PayrollResult;
 import com.insbean.payroll.calendar.WorkingDays;
@@ -26,6 +31,7 @@ import com.insbean.payroll.period.mapper.PeriodMapper;
 import com.insbean.payroll.record.PeriodTotalsRefresher;
 import com.insbean.payroll.record.RecordAssembler;
 import com.insbean.payroll.security.DataScopeEnforcer;
+import com.insbean.payroll.setting.ConfigService;
 import com.insbean.payroll.run.dto.RunErrorDTO;
 import com.insbean.payroll.run.dto.RunProgressDTO;
 import com.insbean.payroll.record.mapper.PayRecordItemMapper;
@@ -45,6 +51,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -98,6 +105,7 @@ public class GenerateService {
     private final RecordAssembler recordAssembler;
     private final ObjectMapper objectMapper;
     private final WorkingDays workingDays;
+    private final ConfigService configService;
     private final DataScopeEnforcer dataScope;
     private final PeriodTotalsRefresher totalsRefresher;
     private final TransactionTemplate transactionTemplate;
@@ -117,6 +125,7 @@ public class GenerateService {
                            RecordAssembler recordAssembler,
                            ObjectMapper objectMapper,
                            WorkingDays workingDays,
+                           ConfigService configService,
                            DataScopeEnforcer dataScope,
                            PeriodTotalsRefresher totalsRefresher,
                            PlatformTransactionManager transactionManager) {
@@ -133,6 +142,7 @@ public class GenerateService {
         this.recordAssembler = recordAssembler;
         this.objectMapper = objectMapper;
         this.workingDays = workingDays;
+        this.configService = configService;
         this.dataScope = dataScope;
         this.totalsRefresher = totalsRefresher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -165,6 +175,13 @@ public class GenerateService {
             return run.getId();
         } catch (RuntimeException e) {
             log.warn("期间 {} 生成失败: {}", periodId, e.getMessage());
+            // 分批提交模式下前面批次可能已写入；把期间合计刷新到"实际已写的部分"，
+            // 避免失败后列表页还挂着旧的（或空）合计，造成半成品期间看起来是完整数据。
+            try {
+                totalsRefresher.refresh(period);
+            } catch (RuntimeException refreshError) {
+                log.warn("生成失败后刷新期间合计也失败: {}", refreshError.getMessage());
+            }
             // R10：失败原因必须落到 pay_run.error_msg，不能只靠这次 HTTP 异常——
             // 将来真改异步后，前端只能靠轮询拿到原因。
             progress.failure = e.getMessage();
@@ -207,11 +224,27 @@ public class GenerateService {
                 period.getCompanyId(), periodStart, periodEnd);
         progress.total = employees.size();
 
+        // 业务参数在生成开始时读一次，整批口径一致（参数改到一半不会出现两种算法）。
+        // 计薪天数口径：期间上的 hpd（建期间时已取系统参数作默认）> PayrollRules 常量；
+        // 工龄单价与节假日是纯全局参数，直接取系统参数。
+        BigDecimal payableDaysDivisor = period.getHpd();
+        BigDecimal seniorityPayPerYear = configService.getDecimal(
+                ConfigService.SENIORITY_PAY_PER_YEAR, PayrollRules.SENIORITY_PAY_PER_YEAR);
+        Set<LocalDate> holidays = configService.getDateList(ConfigService.CALENDAR_HOLIDAYS);
+        if (holidays.isEmpty()) {
+            // 参数为空时回退环境变量（PAYROLL_HOLIDAYS），保持既有部署兼容
+            holidays = workingDays.holidays();
+        }
+
         for (int from = 0; from < employees.size(); from += BATCH_SIZE) {
             List<EmpEmployeeEntity> batch = employees.subList(
                     from, Math.min(from + BATCH_SIZE, employees.size()));
+            BigDecimal divisor = payableDaysDivisor;
+            BigDecimal seniority = seniorityPayPerYear;
+            Set<LocalDate> days = holidays;
             transactionTemplate.executeWithoutResult(status ->
-                    processBatch(period, periodStart, periodEnd, itemDefs, sortNoByCode, batch, operatorId, progress));
+                    processBatch(period, periodStart, periodEnd, itemDefs, sortNoByCode, batch,
+                            operatorId, progress, divisor, seniority, days));
         }
     }
 
@@ -222,7 +255,10 @@ public class GenerateService {
                               Map<String, Integer> sortNoByCode,
                               List<EmpEmployeeEntity> batch,
                               Long operatorId,
-                              Progress progress) {
+                              Progress progress,
+                              BigDecimal payableDaysDivisor,
+                              BigDecimal seniorityPayPerYear,
+                              Set<LocalDate> holidays) {
         // 每批都在事务内重新加锁校验期间状态：批次之间可能被锁定，
         // 只在入口校验一次的话，锁定后的批次照样会写进去。
         periodService.assertWritableForUpdate(period.getId());
@@ -230,6 +266,7 @@ public class GenerateService {
         Map<Long, PayRecordEntity> existingByEmployee = existing.stream()
                 .collect(Collectors.toMap(PayRecordEntity::getEmployeeId, Function.identity(), (a, b) -> a));
         Map<Long, Map<String, BigDecimal>> existingVariableAmounts = loadVariableAmounts(existing);
+        Map<Long, Map<String, PayRecordItemEntity>> manualItems = loadManualItems(existing);
 
         for (EmpEmployeeEntity emp : batch) {
             CompProfileDTO profile = compProfileService.effectiveAt(emp.getId(), periodEnd);
@@ -250,20 +287,26 @@ public class GenerateService {
             Map<String, BigDecimal> variableItems = existingRecord == null
                     ? Map.of()
                     : existingVariableAmounts.getOrDefault(existingRecord.getId(), Map.of());
+            Map<String, PayRecordItemEntity> manual = existingRecord == null
+                    ? Map.of()
+                    : manualItems.getOrDefault(existingRecord.getId(), Map.of());
 
             PayrollResult result;
             try {
                 result = calculator.calculate(new EmployeePayContext(
                         emp.getId(), emp.getEmpNo(), emp.getName(), profile.baseSalary(),
                         emp.getHireDate(), emp.getLeaveDate(), periodStart, periodEnd,
-                        payableDays(emp, periodStart, periodEnd),
+                        payableDays(emp, periodStart, periodEnd, holidays),
                         itemDefs, fixedItems, variableItems,
-                        period.getHpd()));
+                        payableDaysDivisor, seniorityPayPerYear));
             } catch (RuntimeException e) {
                 progress.errors.add(new RunErrorDTO(emp.getEmpNo(), "计算失败：" + e.getMessage()));
                 progress.failed++;
                 continue;
             }
+            // 编制台手工改过的项必须原样保留（含 FIXED/COMPUTED 与 4 位精度），
+            // 重新生成只重算系统能算的项，不能把人的修改静默抹掉。
+            result = applyManualOverrides(result, manual, itemDefs);
 
             int seniorityYears = calculator.seniorityYears(emp.getHireDate(), periodEnd);
             // 部门快照与 company_id 同口径：取期间末日的任职部门，而不是人员表的当前部门
@@ -315,6 +358,60 @@ public class GenerateService {
                                 PayRecordItemEntity::getAmount, (a, b) -> a)));
     }
 
+    /** 来源为 MANUAL 的明细（任意类别），重算时整体覆盖计算值。 */
+    private Map<Long, Map<String, PayRecordItemEntity>> loadManualItems(List<PayRecordEntity> records) {
+        if (records.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> ids = records.stream().map(PayRecordEntity::getId).toList();
+        return recordItemMapper.findByRecordIds(ids).stream()
+                .filter(i -> "MANUAL".equals(i.getSource()))
+                .collect(Collectors.groupingBy(PayRecordItemEntity::getRecordId,
+                        Collectors.toMap(PayRecordItemEntity::getItemCode, i -> i, (a, b) -> a)));
+    }
+
+    /**
+     * 把手动项合并回计算结果，并重算合计。
+     *
+     * <p>只覆盖代码相同的项；手动新增的项追加进去。合计按与计算器相同的口径重算：
+     * 应发只加 include_in_gross 的增项，扣款加全部减项，不再二次舍入。
+     */
+    private PayrollResult applyManualOverrides(PayrollResult result,
+                                               Map<String, PayRecordItemEntity> manual,
+                                               Map<String, PayItemDef> itemDefs) {
+        if (manual == null || manual.isEmpty()) {
+            return result;
+        }
+        Map<String, PayItemResult> byCode = new LinkedHashMap<>();
+        for (PayItemResult item : result.items()) {
+            byCode.put(item.code(), item);
+        }
+        for (PayRecordItemEntity entity : manual.values()) {
+            PayItemDef def = itemDefs.get(entity.getItemCode());
+            PayCategory category = entity.getCategory() == null
+                    ? (def == null ? PayCategory.VARIABLE : def.category())
+                    : PayCategory.valueOf(entity.getCategory());
+            boolean decrease = entity.getDirection() != null
+                    ? entity.getDirection() == 2
+                    : def != null && def.direction() == PayDirection.DECREASE;
+            boolean includeInGross = def == null || def.includeInGross();
+            byCode.put(entity.getItemCode(), new PayItemResult(
+                    entity.getItemCode(), entity.getItemName(), category,
+                    decrease ? PayDirection.DECREASE : PayDirection.INCREASE,
+                    entity.getAmount(), PaySource.MANUAL, includeInGross));
+        }
+        List<PayItemResult> items = new ArrayList<>(byCode.values());
+        BigDecimal gross = items.stream()
+                .filter(i -> i.direction() == PayDirection.INCREASE && i.includeInGross())
+                .map(PayItemResult::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal deduction = items.stream()
+                .filter(i -> i.direction() == PayDirection.DECREASE)
+                .map(PayItemResult::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new PayrollResult(List.copyOf(items), gross, deduction, gross.subtract(deduction));
+    }
+
     /**
      * 跨主体同月重复：回查该员工同月的有效记录，把主体名写进错误信息。
      * 唯一索引只是最后一道保险，真正对财务有用的是"去哪家找"。
@@ -338,6 +435,11 @@ public class GenerateService {
      * 23/21.75 = 1.0575，全月在职工资反而多发 5.7%。
      */
     Integer payableDays(EmpEmployeeEntity emp, LocalDate periodStart, LocalDate periodEnd) {
+        return payableDays(emp, periodStart, periodEnd, workingDays.holidays());
+    }
+
+    Integer payableDays(EmpEmployeeEntity emp, LocalDate periodStart, LocalDate periodEnd,
+                        Set<LocalDate> holidays) {
         LocalDate from = periodStart;
         LocalDate to = periodEnd;
         boolean prorated = false;
@@ -352,7 +454,7 @@ public class GenerateService {
         if (!prorated) {
             return null;
         }
-        return workingDays.between(from, to);
+        return workingDays.between(from, to, holidays);
     }
 
     // ------------------------------------------------------------------ 批次与汇总

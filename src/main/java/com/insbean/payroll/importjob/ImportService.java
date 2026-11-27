@@ -387,15 +387,24 @@ public class ImportService {
 
     private void apply(PayPeriodEntity period, ImportBatchEntity batch,
                        ImportValidator.Result result) {
+        Map<String, Boolean> includeByCode = includeInGross(period);
         for (ImportValidator.ValidatedRow row : result.rows()) {
             for (Map.Entry<String, BigDecimal> entry : row.amounts().entrySet()) {
                 upsertItem(batch.getImportMode(), row.recordId(),
                         entry.getKey(), entry.getValue(), result.itemDefs());
             }
-            recalcRecord(row.recordId());
+            recalcRecord(row.recordId(), includeByCode);
         }
         // 明细变了，期间合计与列快照必须同步刷新
         totalsRefresher.refresh(period);
+    }
+
+    /** 与计算/编制台同一口径：include_in_gross=false 的收入项不计入应发。 */
+    private Map<String, Boolean> includeInGross(PayPeriodEntity period) {
+        return itemService.list(period.getCompanyId(), null, null).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        d -> d.itemCode(),
+                        d -> !Boolean.FALSE.equals(d.includeInGross()), (a, b) -> a));
     }
 
     /**
@@ -438,7 +447,7 @@ public class ImportService {
      * 重算一条记录的合计（与编制台同一口径：按 direction 分别加总，不强制定标）。
      * version_no +1 让打开着的编制台在保存时收到 409，而不是静默覆盖导入结果。
      */
-    private void recalcRecord(Long recordId) {
+    private void recalcRecord(Long recordId, Map<String, Boolean> includeByCode) {
         PayRecordEntity record = recordMapper.selectById(recordId);
         if (record == null) {
             return;
@@ -446,6 +455,7 @@ public class ImportService {
         List<PayRecordItemEntity> items = recordItemMapper.findByRecordIds(List.of(recordId));
         BigDecimal gross = items.stream()
                 .filter(i -> i.getDirection() != null && i.getDirection() == 1)
+                .filter(i -> includeByCode.getOrDefault(i.getItemCode(), true))
                 .map(PayRecordItemEntity::getAmount)
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);

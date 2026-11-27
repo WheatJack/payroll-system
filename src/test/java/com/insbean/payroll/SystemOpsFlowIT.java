@@ -122,7 +122,7 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(users.path("data").path("total").asInt()).isEqualTo(3);
 
         JsonNode permissions = getJson("/api/v1/permissions", admin);
-        assertThat(permissions.path("data").size()).isEqualTo(14);
+        assertThat(permissions.path("data").size()).isEqualTo(15);
 
         JsonNode roles = getJson("/api/v1/roles", admin);
         assertThat(roles.path("data").size()).isGreaterThanOrEqualTo(4);
@@ -131,6 +131,45 @@ class SystemOpsFlowIT extends AbstractDbTest {
         // 三权分立：薪酬专员没有 sys:* 权限，仍然看不到用户管理
         String hr01 = login("hr01");
         assertThat(mvc.perform(get("/api/v1/users").header("Authorization", "Bearer " + hr01))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    void 系统参数接口按权限与只读位保护() throws Exception {
+        String admin = login("admin");
+
+        JsonNode list = getJson("/api/v1/configs", admin);
+        assertThat(list.path("data").size()).isEqualTo(4);
+
+        MvcResult updated = mvc.perform(put("/api/v1/configs/payroll.seniority-pay-per-year")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\":\"200\"}"))
+                .andReturn();
+        assertThat(updated.getResponse().getStatus()).isEqualTo(200);
+        assertThat(objectMapper.readTree(body(updated)).path("data").path("value").asText())
+                .isEqualTo("200");
+
+        // 只读参数 → 403
+        assertThat(mvc.perform(put("/api/v1/configs/payroll.system-version")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\":\"2\"}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+
+        // 格式非法 → 400
+        assertThat(mvc.perform(put("/api/v1/configs/payroll.seniority-pay-per-year")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\":\"abc\"}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(400);
+
+        // 薪酬专员没有 sys:config:edit → 403
+        String hr01 = login("hr01");
+        assertThat(mvc.perform(put("/api/v1/configs/payroll.seniority-pay-per-year")
+                        .header("Authorization", "Bearer " + hr01)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\":\"300\"}"))
                 .andReturn().getResponse().getStatus()).isEqualTo(403);
     }
 

@@ -230,6 +230,7 @@ public class ExportService {
     // ------------------------------------------------------------------ PERIOD_SHEET
 
     private List<ExcelWriter.SheetData> periodSheets(ReportExportParams params) {
+        assertPeriodLocked(params.periodYm());
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), null);
         if (records.isEmpty()) {
             return List.of(emptyPaySheet("工资表-" + params.periodYm()));
@@ -262,6 +263,7 @@ public class ExportService {
     // ------------------------------------------------------------------ PAYSLIP
 
     private List<ExcelWriter.SheetData> payslipSheets(ReportExportParams params) {
+        assertPeriodLocked(params.periodYm());
         List<Long> employeeIds = params.employeeIds();
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), employeeIds);
         if (records.isEmpty()) {
@@ -311,6 +313,25 @@ public class ExportService {
             return row;
         }).toList();
         return new ExcelWriter.SheetData(name, columns, rows);
+    }
+
+    /**
+     * 编制中（DRAFT/EDITING）的期间不得导出完整工资表/工资条。
+     *
+     * <p>以前是过滤后返回空表 + 200，前端会以为"导出成功但没数据"；
+     * 这里明确 409，和"报表只统计已锁定期间"的口径一致。
+     */
+    private void assertPeriodLocked(String periodYm) {
+        CurrentUser current = requireUser();
+        List<PayPeriodEntity> periods = periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
+                .eq(PayPeriodEntity::getPeriodYm, periodYm));
+        boolean anyUnlocked = periods.stream()
+                .filter(p -> DataScopeEnforcer.ALL.equals(current.dataScope())
+                        || current.companyId().equals(p.getCompanyId()))
+                .anyMatch(p -> !"LOCKED".equals(p.getStatus()) && !"ARCHIVED".equals(p.getStatus()));
+        if (anyUnlocked) {
+            throw new BizException(409, "期间尚未锁定，不能导出完整工资表或工资条");
+        }
     }
 
     /** 已锁定/已归档期间、未删除、且通过数据范围的核算记录。 */

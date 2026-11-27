@@ -8,6 +8,7 @@ public record PayItemResult(
         PayCategory category,
         PayDirection direction,
         BigDecimal amount,
-        PaySource source
+        PaySource source,
+        boolean includeInGross
 ) {
 }

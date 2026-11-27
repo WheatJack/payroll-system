@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.Money;
 import com.insbean.payroll.domain.entity.PayRecordEntity;
 import com.insbean.payroll.report.dto.AnnualReportRow;
 import com.insbean.payroll.report.dto.MonthlyReportRow;
@@ -14,7 +15,6 @@ import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 
@@ -212,7 +212,7 @@ public class ReportService {
             return new BigDecimal("0.00");
         }
         BigDecimal amount = value instanceof BigDecimal b ? b : new BigDecimal(value.toString());
-        return amount.setScale(2, RoundingMode.HALF_UP);
+        return Money.scaled(amount);
     }
 
     private static Long asLong(Object value) {

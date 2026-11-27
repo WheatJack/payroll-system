@@ -22,15 +22,21 @@ class PayrollCalculatorTest {
 
     static {
         DEFS.put(PayrollCalculator.BASE_SALARY,
-                new PayItemDef(PayrollCalculator.BASE_SALARY, "基本工资", PayCategory.FIXED, PayDirection.INCREASE));
+                new PayItemDef(PayrollCalculator.BASE_SALARY, "基本工资", PayCategory.FIXED, PayDirection.INCREASE, 2, true));
         DEFS.put("POST_ALLOW",
-                new PayItemDef("POST_ALLOW", "岗位津贴", PayCategory.FIXED, PayDirection.INCREASE));
+                new PayItemDef("POST_ALLOW", "岗位津贴", PayCategory.FIXED, PayDirection.INCREASE, 2, true));
         DEFS.put(PayrollCalculator.SENIORITY_PAY,
-                new PayItemDef(PayrollCalculator.SENIORITY_PAY, "工龄工资", PayCategory.COMPUTED, PayDirection.INCREASE));
+                new PayItemDef(PayrollCalculator.SENIORITY_PAY, "工龄工资", PayCategory.COMPUTED, PayDirection.INCREASE, 2, true));
         DEFS.put("PERF_BONUS",
-                new PayItemDef("PERF_BONUS", "绩效奖金", PayCategory.VARIABLE, PayDirection.INCREASE));
+                new PayItemDef("PERF_BONUS", "绩效奖金", PayCategory.VARIABLE, PayDirection.INCREASE, 2, true));
         DEFS.put("ATT_DEDUCT",
-                new PayItemDef("ATT_DEDUCT", "考勤扣款", PayCategory.VARIABLE, PayDirection.DECREASE));
+                new PayItemDef("ATT_DEDUCT", "考勤扣款", PayCategory.VARIABLE, PayDirection.DECREASE, 2, true));
+        // 4 位精度科目：用来证明"生成路径不会把它舍成 2 位"
+        DEFS.put("PRECISE",
+                new PayItemDef("PRECISE", "高精度津贴", PayCategory.VARIABLE, PayDirection.INCREASE, 4, true));
+        // 不计入应发合计的收入项
+        DEFS.put("NON_GROSS",
+                new PayItemDef("NON_GROSS", "不计应发补贴", PayCategory.VARIABLE, PayDirection.INCREASE, 2, false));
     }
 
     private EmployeePayContext ctx(String baseSalary, LocalDate hireDate, Integer payableDays,
@@ -42,6 +48,29 @@ class PayrollCalculatorTest {
                 LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 30),
                 payableDays,
                 DEFS, fixed, variable);
+    }
+
+    @Test
+    @DisplayName("四位精度科目按自身精度舍入，合计不二次舍入")
+    void fourDecimalItem() {
+        PayrollResult r = calculator.calculate(ctx("8000", LocalDate.of(2020, 3, 1), null,
+                Map.of(), Map.of("PRECISE", new BigDecimal("1234.5678"))));
+
+        assertThat(amountOf(r, "PRECISE")).isEqualByComparingTo("1234.5678");
+        // 8000 + 600 + 1234.5678，禁止被二次舍入成 9834.57
+        assertThat(r.grossAmount()).isEqualByComparingTo("9834.5678");
+        assertThat(r.netAmount()).isEqualByComparingTo("9834.5678");
+    }
+
+    @Test
+    @DisplayName("include_in_gross=false 的收入项保留明细但不进应发")
+    void nonGrossItem() {
+        PayrollResult r = calculator.calculate(ctx("8000", LocalDate.of(2020, 3, 1), null,
+                Map.of(), Map.of("NON_GROSS", new BigDecimal("500"))));
+
+        assertThat(amountOf(r, "NON_GROSS")).isEqualByComparingTo("500.00");
+        assertThat(r.grossAmount()).isEqualByComparingTo("8600.00");
+        assertThat(r.netAmount()).isEqualByComparingTo("8600.00");
     }
 
     @Test

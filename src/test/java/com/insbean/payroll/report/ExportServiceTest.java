@@ -215,6 +215,27 @@ class ExportServiceTest extends AbstractDbTest {
         assertThat(auditCount()).isZero();
     }
 
+    @Test
+    void 编制中期间导出完整工资表返回409() {
+        // 另建一个未锁定的期间并生成数据
+        long december = periodService.create(
+                new PeriodCreateReq(null, "2026-12"), TestDb.COMPANY_DEFAULT).id();
+        generateService.startGenerate(december, 1L);
+
+        login(exportPerms());
+        var params = new ReportExportParams("2026-12", null, null, null, null, null);
+        assertThatThrownBy(() -> exportService.export(
+                new ExportRequest("PERIOD_SHEET", params, "XLSX")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(409);
+        assertThatThrownBy(() -> exportService.export(
+                new ExportRequest("PAYSLIP", params, "XLSX")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(409);
+        // 未提交，不应留下导出审计
+        assertThat(auditCount()).isZero();
+    }
+
     // ------------------------------------------------------------------ 工具
 
     private ExportRequest monthly() {

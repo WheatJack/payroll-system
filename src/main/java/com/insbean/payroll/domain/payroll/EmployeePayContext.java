@@ -15,6 +15,9 @@ import java.util.Map;
  *                           {@link PayrollRules#MONTHLY_PAYABLE_DAYS}（21.75）。
  *                           做成参数而不是常量：不同主体/期间可以配不同的计薪天数，
  *                           硬编码会让「期间参数」形同虚设。
+ * @param seniorityPayPerYear 工龄工资每年金额（系统参数），为 null 时用
+ *                           {@link PayrollRules#SENIORITY_PAY_PER_YEAR}（100）。
+ *                           同样由调用方从 ConfigService 读入，domain 层不依赖 Spring。
  */
 public record EmployeePayContext(
         Long employeeId,
@@ -29,7 +32,8 @@ public record EmployeePayContext(
         Map<String, PayItemDef> itemDefs,
         Map<String, BigDecimal> fixedItems,
         Map<String, BigDecimal> variableItems,
-        BigDecimal monthlyPayableDays
+        BigDecimal monthlyPayableDays,
+        BigDecimal seniorityPayPerYear
 ) {
 
     /** 兼容不关心期间参数的调用方（默认 21.75）。 */
@@ -46,12 +50,18 @@ public record EmployeePayContext(
                               Map<String, BigDecimal> fixedItems,
                               Map<String, BigDecimal> variableItems) {
         this(employeeId, empNo, empName, baseSalary, hireDate, leaveDate, periodStart, periodEnd,
-                payableDays, itemDefs, fixedItems, variableItems, null);
+                payableDays, itemDefs, fixedItems, variableItems, null, null);
     }
 
     public BigDecimal payableDaysDivisor() {
         return monthlyPayableDays != null && monthlyPayableDays.signum() > 0
                 ? monthlyPayableDays
                 : PayrollRules.MONTHLY_PAYABLE_DAYS;
+    }
+
+    public BigDecimal seniorityPerYearValue() {
+        return seniorityPayPerYear != null
+                ? seniorityPayPerYear
+                : PayrollRules.SENIORITY_PAY_PER_YEAR;
     }
 }

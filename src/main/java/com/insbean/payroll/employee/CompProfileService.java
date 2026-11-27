@@ -1,7 +1,9 @@
 package com.insbean.payroll.employee;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.Money;
 import com.insbean.payroll.domain.entity.EmpCompProfileEntity;
 import com.insbean.payroll.domain.entity.EmpCompProfileItemEntity;
 import com.insbean.payroll.employee.dto.CompProfileDTO;
@@ -38,13 +40,16 @@ public class CompProfileService {
     private final CompProfileMapper profileMapper;
     private final CompProfileItemMapper itemMapper;
     private final DataScopeEnforcer dataScope;
+    private final AuditService auditService;
 
     public CompProfileService(CompProfileMapper profileMapper,
                               CompProfileItemMapper itemMapper,
-                              DataScopeEnforcer dataScope) {
+                              DataScopeEnforcer dataScope,
+                              AuditService auditService) {
         this.profileMapper = profileMapper;
         this.itemMapper = itemMapper;
         this.dataScope = dataScope;
+        this.auditService = auditService;
     }
 
     public List<CompProfileDTO> timeline(Long employeeId) {
@@ -167,6 +172,9 @@ public class CompProfileService {
             profileMapper.deleteById(sameDay.getId());
         }
 
+        BigDecimal previousBaseSalary = covering != null ? covering.getBaseSalary()
+                : (sameDay != null ? sameDay.getBaseSalary() : null);
+
         EmpCompProfileEntity entity = new EmpCompProfileEntity();
         entity.setEmployeeId(req.employeeId());
         entity.setEffectiveFrom(from);
@@ -177,6 +185,10 @@ public class CompProfileService {
         entity.setDeleted(0);
         profileMapper.insert(entity);
         replaceItems(entity.getId(), req.items());
+        // 调薪是最该留痕的动作：谁在什么时候把基本工资从多少改到多少
+        auditService.record("EMPLOYEE", req.employeeId(), "UPDATE", "comp_profile",
+                previousBaseSalary == null ? null : Money.format(previousBaseSalary),
+                Money.format(entity.getBaseSalary()));
 
         assertNoOverlap(req.employeeId());
         return toDto(entity, normalizeItems(req.items()));

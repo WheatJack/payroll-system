@@ -63,7 +63,9 @@ public class ItemService {
                     dto.itemCode(),
                     dto.itemName(),
                     PayCategory.valueOf(dto.category()),
-                    dto.direction() != null && dto.direction() == 2 ? PayDirection.DECREASE : PayDirection.INCREASE));
+                    dto.direction() != null && dto.direction() == 2 ? PayDirection.DECREASE : PayDirection.INCREASE,
+                    dto.precisionScale() == null ? 2 : dto.precisionScale(),
+                    Boolean.TRUE.equals(dto.includeInGross())));
         }
         return defs;
     }

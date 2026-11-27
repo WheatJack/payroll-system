@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -181,6 +182,19 @@ class CompProfileServiceTest extends AbstractDbTest {
                 new CompProfileSaveReq(null, null, null, new BigDecimal("9500"), "调薪", List.of()));
 
         assertThat(updated.items()).isEmpty();
+    }
+
+    @Test
+    void 调薪写金额变更审计() {
+        service.save(req(empId, LocalDate.of(2026, 12, 1), "9000", "年度调薪"));
+
+        Map<String, Object> audit = jdbc.queryForMap("""
+                SELECT old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'EMPLOYEE' AND biz_id = ? AND field_name = 'comp_profile'
+                 ORDER BY id DESC LIMIT 1
+                """, empId);
+        assertThat(audit.get("old_value")).isEqualTo("8000.00");
+        assertThat(audit.get("new_value")).isEqualTo("9000.00");
     }
 
     private static CompProfileSaveReq req(Long employeeId, LocalDate from, String salary, String reason) {

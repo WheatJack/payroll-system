@@ -2,6 +2,7 @@ package com.insbean.payroll.employee;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.domain.entity.EmpEmployeeEntity;
 import com.insbean.payroll.domain.entity.EmpEmploymentEntity;
@@ -11,12 +12,14 @@ import com.insbean.payroll.employee.dto.EmployeeQuery;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
 import com.insbean.payroll.employee.mapper.EmployeeMapper;
 import com.insbean.payroll.employee.mapper.EmploymentMapper;
+import com.insbean.payroll.org.mapper.DeptMapper;
 import com.insbean.payroll.security.CryptoService;
 import com.insbean.payroll.security.DataScopeEnforcer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.Period;
 import java.util.Objects;
 
 @Service
@@ -25,16 +28,22 @@ public class EmployeeService {
     private final EmployeeMapper employeeMapper;
     private final EmploymentMapper employmentMapper;
     private final CryptoService cryptoService;
+    private final DeptMapper deptMapper;
     private final DataScopeEnforcer dataScope;
+    private final AuditService auditService;
 
     public EmployeeService(EmployeeMapper employeeMapper,
                            EmploymentMapper employmentMapper,
                            CryptoService cryptoService,
-                           DataScopeEnforcer dataScope) {
+                           DeptMapper deptMapper,
+                           DataScopeEnforcer dataScope,
+                           AuditService auditService) {
         this.employeeMapper = employeeMapper;
         this.employmentMapper = employmentMapper;
         this.cryptoService = cryptoService;
+        this.deptMapper = deptMapper;
         this.dataScope = dataScope;
+        this.auditService = auditService;
     }
 
     @Transactional
@@ -95,6 +104,7 @@ public class EmployeeService {
         employment.setDeleted(0);
         employmentMapper.insert(employment);
 
+        auditService.record("EMPLOYEE", entity.getId(), "CREATE", "empNo", null, entity.getEmpNo());
         return entity.getId();
     }
 
@@ -180,6 +190,10 @@ public class EmployeeService {
             LocalDate effectiveDate = req.effectiveDate() != null ? req.effectiveDate() : LocalDate.now();
             transfer(entity.getId(), entity.getCompanyId(), entity.getDeptId(), effectiveDate);
         }
+        // 不落证件号/手机号明文；只记变更摘要
+        auditService.record("EMPLOYEE", entity.getId(), "UPDATE", "profile", null,
+                "empNo=" + entity.getEmpNo() + ";deptId=" + entity.getDeptId()
+                        + ";status=" + entity.getStatus());
         return toDto(entity);
     }
 
@@ -229,6 +243,8 @@ public class EmployeeService {
         entity.setChangeType("TRANSFER");
         entity.setDeleted(0);
         employmentMapper.insert(entity);
+        auditService.record("EMPLOYEE", employeeId, "UPDATE", "employment", null,
+                "companyId=" + companyId + ";deptId=" + deptId + ";effectiveDate=" + effectiveDate);
     }
 
     /**
@@ -273,7 +289,7 @@ public class EmployeeService {
         Page<EmpEmployeeEntity> page = employeeMapper.selectPage(
                 new Page<>(query.pageNo(), query.pageSize()), wrapper);
         return new EmployeePageDTO(
-                page.getRecords().stream().map(EmployeeService::toDto).toList(),
+                page.getRecords().stream().map(this::toDto).toList(),
                 page.getTotal(),
                 (int) page.getCurrent(),
                 (int) page.getSize());
@@ -293,11 +309,26 @@ public class EmployeeService {
         }
     }
 
-    private static EmployeeDTO toDto(EmpEmployeeEntity e) {
+    private EmployeeDTO toDto(EmpEmployeeEntity e) {
+        LocalDate today = LocalDate.now();
+        String deptName = e.getDeptId() == null ? null : deptMapper.findNameById(e.getDeptId());
         return new EmployeeDTO(
                 e.getId(), e.getCompanyId(), e.getEmpNo(), e.getName(), e.getGender(), e.getIdType(),
                 e.getIdNoMask(), e.getMobileMask(), e.getEmployeeType(), e.getJobLevel(),
-                e.getPositionName(), e.getDeptId(), e.getHireDate(), e.getWorkStartDate(),
-                e.getLeaveDate(), e.getStatus(), e.getRemark());
+                e.getPositionName(), e.getDeptId(), deptName == null ? "" : deptName,
+                e.getHireDate(), e.getWorkStartDate(),
+                e.getLeaveDate(), wholeYears(e.getHireDate(), today),
+                wholeYears(e.getWorkStartDate(), today), e.getStatus(), e.getRemark());
+    }
+
+    /** 整年差（向下取整）；入职/参加工作日期为空返回 null，未来日期按 0 处理。 */
+    private static Integer wholeYears(LocalDate from, LocalDate to) {
+        if (from == null) {
+            return null;
+        }
+        if (from.isAfter(to)) {
+            return 0;
+        }
+        return Period.between(from, to).getYears();
     }
 }

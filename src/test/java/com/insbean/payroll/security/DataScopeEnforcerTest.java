@@ -11,6 +11,7 @@ import com.insbean.payroll.employee.dto.CompProfileSaveReq;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
 import com.insbean.payroll.period.PeriodService;
 import com.insbean.payroll.period.dto.PeriodCreateReq;
+import com.insbean.payroll.period.dto.PeriodDTO;
 import com.insbean.payroll.record.RecordService;
 import com.insbean.payroll.record.dto.ChangesetChange;
 import com.insbean.payroll.record.dto.ChangesetItem;
@@ -95,6 +96,36 @@ class DataScopeEnforcerTest extends AbstractDbTest {
         assertThat(recordService.grid(periodId).rows())
                 .extracting(GridRow::empNo)
                 .containsExactly("E001");
+    }
+
+    @Test
+    void 期间合计按数据范围收窄() {
+        BigDecimal ownGross = jdbc.queryForObject("""
+                SELECT gross_amount FROM pay_record
+                 WHERE period_id = ? AND emp_no = 'E001' AND deleted = 0
+                """, BigDecimal.class, periodId);
+        BigDecimal companyGross = jdbc.queryForObject("""
+                SELECT SUM(gross_amount) FROM pay_record
+                 WHERE period_id = ? AND company_id = ? AND deleted = 0
+                """, BigDecimal.class, periodId, TestDb.COMPANY_DEFAULT);
+
+        asUser("SELF", selfEmployee, TestDb.DEPT_DEFAULT);
+        PeriodDTO self = periodService.get(periodId);
+        assertThat(self.totalGross()).isEqualByComparingTo(ownGross);
+        assertThat(self.totalNet()).isEqualByComparingTo(ownGross);
+        assertThat(self.employeeCount()).isEqualTo(1);
+        // 绝不能等于全公司合计
+        assertThat(self.totalGross()).isNotEqualByComparingTo(companyGross);
+
+        // 列表接口同样收窄
+        assertThat(periodService.list(TestDb.COMPANY_DEFAULT))
+                .filteredOn(p -> p.id().equals(periodId))
+                .singleElement()
+                .satisfies(p -> assertThat(p.totalGross()).isEqualByComparingTo(ownGross));
+
+        // 集团账号仍看期间表上的公司口径
+        CurrentUser.set(ALL_SCOPE_USER);
+        assertThat(periodService.get(periodId).totalGross()).isEqualByComparingTo(companyGross);
     }
 
     @Test

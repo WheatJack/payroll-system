@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDate;
+import java.time.Period;
 import java.util.List;
 import java.util.Map;
 
@@ -168,6 +169,41 @@ class EmployeeServiceTest extends AbstractDbTest {
                 "SELECT COUNT(*) FROM emp_employment WHERE employee_id = ?", Integer.class, id);
         assertThat(rows).isEqualTo(2);
         assertThat(service.companyAt(id, LocalDate.now().minusDays(1))).isEqualTo(TestDb.COMPANY_DEFAULT);
+    }
+
+    @Test
+    void 人员返回部门名与本单位工龄() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+
+        EmployeeDTO dto = service.get(id);
+        LocalDate today = LocalDate.now();
+        assertThat(dto.deptName()).isEqualTo("综合部");
+        assertThat(dto.seniorityYears())
+                .isEqualTo(Period.between(LocalDate.of(2020, 3, 1), today).getYears());
+        assertThat(dto.socialSeniorityYears())
+                .isEqualTo(Period.between(LocalDate.of(2018, 7, 1), today).getYears());
+    }
+
+    @Test
+    void 未填参加工作时间时社会工龄为空() {
+        Long id = service.create(new EmployeeSaveReq(
+                null, "E002", "李四", 1, "ID_CARD", "110101199001015678", null,
+                "REGULAR", "P6", "工程师", TestDb.DEPT_DEFAULT,
+                LocalDate.of(2024, 5, 20), null, null, 1, null), TestDb.COMPANY_DEFAULT);
+
+        EmployeeDTO dto = service.get(id);
+        assertThat(dto.socialSeniorityYears()).isNull();
+        assertThat(dto.seniorityYears())
+                .isEqualTo(Period.between(LocalDate.of(2024, 5, 20), LocalDate.now()).getYears());
+    }
+
+    @Test
+    void 新增人员写创建审计() {
+        Long id = service.create(createReq("E001", ID_NO), TestDb.COMPANY_DEFAULT);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_audit_log
+                 WHERE biz_type = 'EMPLOYEE' AND biz_id = ? AND action = 'CREATE'
+                """, Integer.class, id)).isEqualTo(1);
     }
 
     private EmployeeSaveReq createReq(String empNo, String idNo) {

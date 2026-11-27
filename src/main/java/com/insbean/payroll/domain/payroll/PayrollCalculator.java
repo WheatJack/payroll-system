@@ -32,7 +32,7 @@ public class PayrollCalculator {
 
         // 工龄工资按整年计算，不足整月不折算（C13）
         if (ctx.itemDefs().containsKey(SENIORITY_PAY)) {
-            BigDecimal seniorityPay = PayrollRules.SENIORITY_PAY_PER_YEAR
+            BigDecimal seniorityPay = ctx.seniorityPerYearValue()
                     .multiply(BigDecimal.valueOf(seniorityYears(ctx.hireDate(), ctx.periodEnd())));
             items.add(item(ctx, SENIORITY_PAY, seniorityPay, null, PaySource.COMPUTED));
         }
@@ -41,8 +41,8 @@ public class PayrollCalculator {
         ctx.variableItems().forEach((code, raw) ->
                 items.add(item(ctx, code, raw, null, PaySource.VARIABLE)));
 
-        BigDecimal gross = sumOf(items, PayDirection.INCREASE);
-        BigDecimal deduction = sumOf(items, PayDirection.DECREASE);
+        BigDecimal gross = sumOf(items, PayDirection.INCREASE, true);
+        BigDecimal deduction = sumOf(items, PayDirection.DECREASE, false);
         return new PayrollResult(List.copyOf(items), gross, deduction, gross.subtract(deduction));
     }
 
@@ -69,20 +69,26 @@ public class PayrollCalculator {
         if (def == null) {
             throw new IllegalStateException("工资项定义缺失: " + code);
         }
+        // 按科目自己的精度舍入一次。统一按 2 位会把 4 位科目的金额静默改掉，
+        // 导致"生成路径"与"编制台/导入路径"算出不同的钱。
+        int scale = def.precisionScale() > 0 ? def.precisionScale() : PayrollRules.AMOUNT_SCALE;
         BigDecimal amount = (factor == null ? raw : raw.multiply(factor))
-                .setScale(PayrollRules.AMOUNT_SCALE, RoundingMode.HALF_UP);
-        return new PayItemResult(def.code(), def.name(), def.category(), def.direction(), amount, source);
+                .setScale(scale, RoundingMode.HALF_UP);
+        return new PayItemResult(def.code(), def.name(), def.category(), def.direction(),
+                amount, source, def.includeInGross());
     }
 
     /**
-     * 合计只累加已舍入的明细，用 UNNECESSARY 断言"重新定标不会丢失精度"——
-     * 一旦有人改动明细精度，这里会立刻抛错，而不是悄悄产生一分钱误差。
+     * 合计只累加已舍入的明细，不再二次舍入——明细精度可以不同（2 位/4 位），
+     * 强制统一定标要么吃精度要么抛异常；合计就是精确加总。
+     *
+     * @param onlyGrossIncluded 只累加 include_in_gross=true 的项（仅对应发合计有意义）
      */
-    private BigDecimal sumOf(List<PayItemResult> items, PayDirection direction) {
+    private BigDecimal sumOf(List<PayItemResult> items, PayDirection direction, boolean onlyGrossIncluded) {
         return items.stream()
                 .filter(i -> i.direction() == direction)
+                .filter(i -> !onlyGrossIncluded || i.includeInGross())
                 .map(PayItemResult::amount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .setScale(PayrollRules.AMOUNT_SCALE, RoundingMode.UNNECESSARY);
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 }

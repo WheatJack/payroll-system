@@ -238,6 +238,51 @@ class RecordServiceTest extends AbstractDbTest {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    @Test
+    void 不计入应发的收入项不改合计但保留明细() {
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction,
+                                      data_type, precision_scale, include_in_gross, editable,
+                                      importable, sort_no, status)
+                VALUES (0, 'NON_GROSS', '不计应发补贴', 'VARIABLE', 1, 'AMOUNT', 2, 0, 1, 1, 58, 1)
+                """);
+        recordService.applyChangeset(periodId, oneChange(recordId, 0, Map.of("NON_GROSS", "500.00")));
+
+        GridRow row = recordService.grid(periodId).rows().get(0);
+        assertThat(row.items()).containsEntry("NON_GROSS", "500.00");
+        assertThat(new BigDecimal(row.grossAmount())).isEqualByComparingTo("8600.00");
+        assertThat(new BigDecimal(row.netAmount())).isEqualByComparingTo("8600.00");
+    }
+
+    @Test
+    void 金额变更与查看都写审计() {
+        recordService.applyChangeset(periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "2000.00")));
+
+        Map<String, Object> created = jdbc.queryForMap("""
+                SELECT action, old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'RECORD' AND biz_id = ? AND field_name = 'PERF_BONUS'
+                 ORDER BY id DESC LIMIT 1
+                """, recordId);
+        assertThat(created.get("action")).isEqualTo("UPDATE");
+        assertThat(created.get("old_value")).isNull();
+        assertThat(created.get("new_value")).isEqualTo("2000.00");
+
+        recordService.applyChangeset(periodId, oneChange(recordId, 1, Map.of("PERF_BONUS", "2500.00")));
+        Map<String, Object> changed = jdbc.queryForMap("""
+                SELECT old_value, new_value FROM pay_audit_log
+                 WHERE biz_type = 'RECORD' AND biz_id = ? AND field_name = 'PERF_BONUS'
+                 ORDER BY id DESC LIMIT 1
+                """, recordId);
+        assertThat(changed.get("old_value")).isEqualTo("2000.00");
+        assertThat(changed.get("new_value")).isEqualTo("2500.00");
+
+        recordService.grid(periodId);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_audit_log
+                 WHERE biz_type = 'RECORD' AND action = 'VIEW' AND field_name = 'grid' AND biz_id = ?
+                """, Integer.class, periodId)).isEqualTo(1);
+    }
+
     private static ChangesetReq oneChange(Long recordId, int version, Map<String, String> items) {
         return new ChangesetReq(List.of(new ChangesetChange(recordId, version,
                 items.entrySet().stream()
