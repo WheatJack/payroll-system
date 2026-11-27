@@ -58,7 +58,9 @@ async function load() {
     const page = await employeeApi.listEmployees(query.value)
     if (!loadGuard.isLatest(token)) return
     rows.value = page.records
-    total.value = page.total
+    // total 是计数不是 ID：后端把 Long 统一序列化成字符串，
+    // 直接传给 ElPagination 会因类型不符整块不渲染。计数在 2^53 内，转 Number 安全。
+    total.value = Number(page.total) || 0
     current.value = page.current
     size.value = page.size
   } catch (error) {

@@ -93,7 +93,8 @@ async function load() {
     const page = await systemApi.listUsers(query.value)
     if (!loadGuard.isLatest(token)) return
     rows.value = page.records
-    total.value = page.total
+    // 同 EmployeeListView：total 是计数，后端序列化成字符串，必须转 Number 才能给分页器
+    total.value = Number(page.total) || 0
     current.value = page.current
     size.value = page.size
   } catch (error) {
