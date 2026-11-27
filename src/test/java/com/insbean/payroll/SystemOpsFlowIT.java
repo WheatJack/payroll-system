@@ -113,6 +113,44 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 系统管理员可以读取部门与主体列表() throws Exception {
+        // admin 只有 sys:*，没有 payroll:record:view——组织数据是登录即可读的公共基础数据
+        String admin = login("admin");
+
+        JsonNode depts = getJson("/api/v1/depts", admin, "companyId", "1");
+        assertThat(depts.path("code").asInt()).isZero();
+        assertThat(depts.path("data").size()).isPositive();
+
+        JsonNode companies = getJson("/api/v1/companies", admin);
+        assertThat(companies.path("code").asInt()).isZero();
+        assertThat(companies.path("data").size()).isPositive();
+    }
+
+    @Test
+    void 未登录读取组织数据返回401() throws Exception {
+        assertThat(mvc.perform(get("/api/v1/depts").param("companyId", "1"))
+                .andReturn().getResponse().getStatus()).isEqualTo(401);
+        assertThat(mvc.perform(get("/api/v1/companies"))
+                .andReturn().getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void 无部门编辑权限不能创建部门() throws Exception {
+        String hr01 = login("hr01");
+        Map<String, Object> body = Map.of(
+                "companyId", "1", "deptCode", "NEW_DEPT", "deptName", "新部门");
+
+        MvcResult result = mvc.perform(post("/api/v1/depts")
+                        .header("Authorization", "Bearer " + hr01)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(403);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_dept WHERE dept_code = 'NEW_DEPT'", Integer.class)).isZero();
+    }
+
+    @Test
     void 全新种子下系统管理员可管理而薪酬专员仍被拒() throws Exception {
         // 全新安装后必须存在一个能进入系统管理页的账号，否则"先有管理员才能建管理员"是死循环
         String admin = login("admin");
