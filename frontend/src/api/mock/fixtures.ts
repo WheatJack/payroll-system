@@ -415,7 +415,7 @@ export const SOCIAL_INSURANCE: SocialInsurance[] = [
   {
     id: '1',
     employeeId: '1',
-    cityCode: 'BEIJING',
+    cityCode: 'BJ',
     // socialBase 省略 = 按近 12 期平均应发自动计算
     housingFundRate: '0.12',
     effectiveFrom: '2026-01-01',
@@ -424,7 +424,7 @@ export const SOCIAL_INSURANCE: SocialInsurance[] = [
   {
     id: '2',
     employeeId: '2',
-    cityCode: 'SHANGHAI',
+    cityCode: 'SH',
     socialBase: '8000.00',
     housingFundRate: '0.07',
     effectiveFrom: '2026-01-01',
@@ -433,7 +433,7 @@ export const SOCIAL_INSURANCE: SocialInsurance[] = [
 ]
 
 export const INSURANCE_PARAMS: Record<string, InsuranceParam[]> = {
-  BEIJING: [
+  BJ: [
     { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '0.00' },
     { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '3.00' },
     { insuranceType: 'UNEMPLOYMENT', personalRate: '0.005', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '0.00' },
@@ -441,13 +441,13 @@ export const INSURANCE_PARAMS: Record<string, InsuranceParam[]> = {
     { insuranceType: 'MATERNITY', personalRate: '0', baseMin: '0.00', baseMax: '0.00', extraAmount: '0.00' },
     { insuranceType: 'HOUSING_FUND', personalRate: '0.12', baseMin: '2420.00', baseMax: '35283.00', extraAmount: '0.00' },
   ],
-  SHANGHAI: [
+  SH: [
     { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
     { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
     { insuranceType: 'UNEMPLOYMENT', personalRate: '0.005', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
     { insuranceType: 'HOUSING_FUND', personalRate: '0.07', baseMin: '2690.00', baseMax: '36921.00', extraAmount: '0.00' },
   ],
-  SHENZHEN: [
+  SZ: [
     { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '2360.00', baseMax: '27927.00', extraAmount: '0.00' },
     { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '7778.00', baseMax: '38892.00', extraAmount: '0.00' },
     { insuranceType: 'UNEMPLOYMENT', personalRate: '0.003', baseMin: '2360.00', baseMax: '27927.00', extraAmount: '0.00' },

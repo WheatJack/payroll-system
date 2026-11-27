@@ -30,6 +30,8 @@ const submitting = ref(false)
 const formError = ref('')
 const cityParams = ref<InsuranceParam[]>([])
 const loadingParams = ref(false)
+/** 城市编码不存在/未配置险种参数：给出可读提示并阻止提交，避免静默 400 */
+const cityParamsMissing = ref(false)
 
 const form = reactive({
   cityCode: '',
@@ -62,14 +64,19 @@ async function load() {
 async function loadCityParams(cityCode: string) {
   if (!cityCode) {
     cityParams.value = []
+    cityParamsMissing.value = false
     return
   }
   loadingParams.value = true
+  cityParamsMissing.value = false
   try {
     cityParams.value = await insuranceApi.listInsuranceParams(cityCode)
+    // 后端对不存在的城市返回空数组：显式提示，不能静默失败
+    cityParamsMissing.value = cityParams.value.length === 0
   } catch (error) {
     console.error('[payroll] 城市险种参数加载失败', error)
     cityParams.value = []
+    cityParamsMissing.value = true
     ElMessage.warning('该城市的险种参数加载失败，比例参考暂不可用')
   } finally {
     loadingParams.value = false
@@ -82,6 +89,7 @@ function openCreate() {
   form.housingFundRate = ''
   form.effectiveFrom = defaultEffectiveFrom()
   cityParams.value = []
+  cityParamsMissing.value = false
   formError.value = ''
   dialogVisible.value = true
 }
@@ -102,6 +110,10 @@ async function submit() {
   formError.value = ''
   if (!form.cityCode) {
     formError.value = '请选择参保城市'
+    return
+  }
+  if (cityParamsMissing.value) {
+    formError.value = '该城市编码不存在或未配置险种参数，提交会被拒绝；请选择 BJ / SH / SZ 或核对编码'
     return
   }
   const base = form.socialBase.trim() === '' ? null : coerce(form.socialBase)
@@ -203,6 +215,14 @@ defineExpose({ reload: load })
 
         <el-form-item v-if="form.cityCode" label="险种参考">
           <div v-loading="loadingParams" class="rate-preview">
+            <el-alert
+              v-if="cityParamsMissing"
+              title="该城市编码不存在或未配置险种参数，提交会被拒绝；请选择 BJ / SH / SZ 或核对编码"
+              type="warning"
+              show-icon
+              :closable="false"
+              class="gap"
+            />
             <el-table v-if="cityParams.length" :data="cityParams" size="small" border>
               <el-table-column label="险种" min-width="120">
                 <template #default="{ row }">{{ insuranceTypeLabel(row.insuranceType) }}</template>

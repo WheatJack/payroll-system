@@ -3,7 +3,7 @@
  *
  * 金额/税率都是字符串；百分比换算走 money.mul（不做浮点运算）。
  */
-import type { AnnualTaxRow, DeductionType } from '@/api/models'
+import type { DeductionType } from '@/api/models'
 import { mul, round } from './money'
 
 /** 专项附加扣除类型的中文名（deductionType 是枚举，界面必须显示中文）。 */
@@ -44,9 +44,9 @@ export interface InsuranceCity {
 }
 
 export const INSURANCE_CITIES: readonly InsuranceCity[] = [
-  { code: 'BEIJING', name: '北京' },
-  { code: 'SHANGHAI', name: '上海' },
-  { code: 'SHENZHEN', name: '深圳' },
+  { code: 'BJ', name: '北京' },
+  { code: 'SH', name: '上海' },
+  { code: 'SZ', name: '深圳' },
 ]
 
 export function insuranceCityLabel(code: string | null | undefined): string {
@@ -62,60 +62,4 @@ export function formatRateAsPercent(rate: string | null | undefined): string {
   } catch {
     return '—'
   }
-}
-
-/** 年度个税导出 CSV 的表头。 */
-export const TAX_CSV_HEADERS = [
-  '工号',
-  '姓名',
-  '部门',
-  '计薪月数',
-  '累计收入',
-  '累计减除',
-  '累计社保',
-  '累计公积金',
-  '累计专项',
-  '应纳税所得额',
-  '累计已预扣',
-  '最近一期个税',
-  '税负率',
-] as const
-
-function csvCell(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`
-  }
-  return value
-}
-
-/**
- * 年度个税核对导出内容（CSV）。
- * 契约的导出端点没有 ANNUAL_TAX 类型，这里先在前端导出 CSV（带 BOM，Excel 可直接打开）；
- * 后端补导出类型后可替换为 xlsx。
- */
-export function buildTaxCsv(rows: readonly AnnualTaxRow[]): string {
-  const lines = [TAX_CSV_HEADERS.join(',')]
-  for (const row of rows) {
-    lines.push(
-      [
-        row.empNo,
-        row.empName,
-        row.deptName ?? '',
-        String(row.paidMonths),
-        row.cumIncome,
-        row.cumBasicDeduction,
-        row.cumSocial,
-        row.cumFund,
-        row.cumSpecial,
-        row.taxable,
-        row.cumTax,
-        row.lastTax,
-        formatRateAsPercent(row.effectiveRate),
-      ]
-        .map(csvCell)
-        .join(','),
-    )
-  }
-  // BOM 让 Excel 正确识别 UTF-8 中文
-  return `﻿${lines.join('\r\n')}`
 }

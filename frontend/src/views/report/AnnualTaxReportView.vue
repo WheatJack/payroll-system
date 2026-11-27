@@ -9,6 +9,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Search } from '@element-plus/icons-vue'
 import * as taxApi from '@/api/tax'
+import * as reportApi from '@/api/report'
 import * as employeeApi from '@/api/employee'
 import { isApiError } from '@/api/client'
 import { saveBlob } from '@/api/download'
@@ -17,7 +18,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
 import { formatOrZero, sum } from '@/utils/money'
 import { paginateRows } from '@/utils/report'
-import { buildTaxCsv, formatRateAsPercent } from '@/utils/tax'
+import { formatRateAsPercent } from '@/utils/tax'
 
 const auth = useAuthStore()
 const canExport = computed(() => auth.has('payroll:export'))
@@ -81,6 +82,14 @@ async function query() {
       ...(filters.value.employeeId ? { employeeId: filters.value.employeeId } : {}),
       ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
     })
+    // 契约：{ rows, excludedPeriods }。若部署的后端还是旧版数组，明确报错而不是静默当空数据
+    if (!result || !Array.isArray(result.rows)) {
+      rows.value = []
+      excludedPeriods.value = []
+      loadError.value = '服务端返回结构不是 { rows, excludedPeriods }（可能后端版本过旧），请升级后端后重试'
+      ElMessage.error(loadError.value)
+      return
+    }
     rows.value = result.rows
     excludedPeriods.value = result.excludedPeriods ?? []
     currentPage.value = 1
@@ -137,15 +146,35 @@ function summaryMethod({ columns }: { columns: Array<{ property?: string }> }): 
   })
 }
 
-function exportCsv() {
+const exporting = ref(false)
+
+/** 服务端 xlsx 导出（ANNUAL_TAX 已进契约，金额/月数/税负率格式由后端处理）。 */
+async function exportReport() {
   if (rows.value.length === 0) {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const csv = buildTaxCsv(rows.value)
-  // 契约的导出端点没有 ANNUAL_TAX 类型，先导出 CSV（带 BOM，Excel 可直接打开）
-  saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `annual-tax-${filters.value.year}.csv`)
-  ElMessage.success('导出已开始下载（CSV）')
+  exporting.value = true
+  try {
+    const file = await reportApi.exportReport(
+      {
+        reportType: 'ANNUAL_TAX',
+        params: {
+          year: filters.value.year,
+          ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
+          ...(filters.value.employeeId ? { employeeId: filters.value.employeeId } : {}),
+        },
+        format: 'XLSX',
+      },
+      `annual-tax-${filters.value.year}.xlsx`,
+    )
+    saveBlob(file.blob, file.filename)
+    ElMessage.success('导出已开始下载')
+  } catch (error) {
+    ElMessage.error(isApiError(error) ? error.message : '导出失败，请稍后重试')
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(() => {
@@ -186,8 +215,8 @@ onMounted(() => {
         <el-button type="primary" :icon="Search" @click="query">查询</el-button>
       </div>
       <div class="toolbar-actions">
-        <el-button v-if="canExport" :icon="Download" :disabled="rows.length === 0" @click="exportCsv">
-          导出 CSV
+        <el-button v-if="canExport" :icon="Download" :disabled="rows.length === 0" :loading="exporting" @click="exportReport">
+          导出 xlsx
         </el-button>
       </div>
     </div>

@@ -68,6 +68,15 @@ import {
 const API = '/api/v1'
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
+/**
+ * mock 的 xlsx 二进制体。必须用字节数组而不是 Blob：
+ * MSW 的 node 适配器会把 jsdom Blob 字符串化（变成 "[object Blob]"），
+ * 导致前端 PK 文件头校验失败。字节数组在浏览器与 node 下都是正确的二进制。
+ */
+function xlsxBytes(label: string): Uint8Array {
+  return new TextEncoder().encode(`PK mock ${label}`)
+}
+
 const ok = (data: unknown) => HttpResponse.json({ code: 0, msg: 'ok', data })
 const fail = (status: number, msg: string, data: unknown = null) =>
   HttpResponse.json({ code: status, msg, data }, { status })
@@ -803,7 +812,7 @@ export const handlers = [
     const denied = requireAuth(request)
     if (denied) return denied
     if (!hasPermission(request, 'payroll:import:submit')) return fail(403, '无权限执行该操作')
-    return new HttpResponse(new Blob(['PK\u0003\u0004 mock employee template'], { type: XLSX_MIME }), {
+    return new HttpResponse(xlsxBytes('employee template'), {
       status: 200,
       headers: {
         'Content-Type': XLSX_MIME,
@@ -875,7 +884,7 @@ export const handlers = [
     const bizType = search.get('bizType')
     if (!periodId || !bizType) return fail(400, 'periodId 与 bizType 必填')
     const filename = `import-template-${bizType}-${periodId}.xlsx`
-    return new HttpResponse(new Blob([`PK\u0003\u0004 mock template ${bizType}`], { type: XLSX_MIME }), {
+    return new HttpResponse(xlsxBytes(`template ${bizType}`), {
       status: 200,
       headers: { 'Content-Type': XLSX_MIME, 'Content-Disposition': `attachment; filename="${filename}"` },
     })
@@ -930,7 +939,7 @@ export const handlers = [
     const entry = importState.batches.get(String(params.batchId))
     if (!entry) return fail(400, '批次不存在')
     const filename = `import-errors-${entry.result.batchId}.xlsx`
-    return new HttpResponse(new Blob([`PK\u0003\u0004 mock errors ${entry.result.failRows}`], { type: XLSX_MIME }), {
+    return new HttpResponse(xlsxBytes(`errors ${entry.result.failRows}`), {
       status: 200,
       headers: { 'Content-Type': XLSX_MIME, 'Content-Disposition': `attachment; filename="${filename}"` },
     })
@@ -1036,14 +1045,16 @@ export const handlers = [
       if (params.groupBy === 'DEPT' && currentUserOf(request)?.dataScope === 'ALL' && !params.companyId) {
         return fail(400, '集团范围按部门导出必须提供 params.companyId')
       }
+    } else if (body.reportType === 'ANNUAL_TAX') {
+      if (!params.year) return fail(400, '年度个税核对必须提供 params.year')
     } else if (!params.periodYm) {
       return fail(400, '该报表类型必须提供 params.periodYm')
     }
 
     const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
     const filename = `${body.reportType.toLowerCase()}-${params.periodYm ?? params.year}-${stamp}.xlsx`
-    const blob = new Blob([`PK\u0003\u0004 mock export ${body.reportType}`], { type: XLSX_MIME })
-    return new HttpResponse(blob, {
+    const bytes = xlsxBytes(`export ${body.reportType}`)
+    return new HttpResponse(bytes, {
       status: 200,
       headers: { 'Content-Type': XLSX_MIME, 'Content-Disposition': `attachment; filename="${filename}"` },
     })
