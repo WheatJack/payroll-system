@@ -16,7 +16,14 @@ import type { AnnualReportRow, ReportGroupBy } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
 import { format, formatOrZero } from '@/utils/money'
-import { sumCountColumn, sumMoneyColumn, validateAnnualFilters } from '@/utils/report'
+import {
+  annualCountValue,
+  formatCount,
+  formatExcludedPeriods,
+  sumCountColumn,
+  sumMoneyColumn,
+  validateAnnualFilters,
+} from '@/utils/report'
 import { buildAnnualParams } from '@/utils/export'
 import { createLatestOnly } from '@/utils/latest'
 
@@ -40,6 +47,9 @@ const filters = ref<{ year: string; groupBy: ReportGroupBy; companyId: string; d
 })
 
 const rows = ref<AnnualReportRow[]>([])
+/** 有明细但未锁定、未计入统计的期间（v1.2 起由后端返回，必须展示） */
+const excludedPeriods = ref<string[]>([])
+const excludedText = computed(() => formatExcludedPeriods(excludedPeriods.value))
 const loading = ref(false)
 const exporting = ref(false)
 const loadError = ref('')
@@ -56,17 +66,20 @@ async function query() {
   loading.value = true
   loadError.value = ''
   try {
-    const data = await reportApi.getAnnualReport({
+    const result = await reportApi.getAnnualReport({
       year: filters.value.year,
       groupBy: filters.value.groupBy,
       ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
       ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
     })
     if (!latest.isLatest(token)) return
-    rows.value = data
+    // v1.2：响应从数组改为 { rows, excludedPeriods }
+    rows.value = result.rows
+    excludedPeriods.value = result.excludedPeriods ?? []
   } catch (error) {
     if (!latest.isLatest(token)) return
     rows.value = []
+    excludedPeriods.value = []
     loadError.value = isApiError(error) ? error.message : '年度汇总加载失败'
     ElMessage.error(loadError.value)
   } finally {
@@ -75,7 +88,10 @@ async function query() {
 }
 
 const totals = computed(() => ({
-  employeeCount: sumCountColumn(rows.value, (row) => row.employeeCount),
+  // 按人分组时 employeeCount 为 null（v1.2 语义），只有按部门才统计人数
+  employeeCount: sumCountColumn(rows.value, (row) =>
+    filters.value.groupBy === 'DEPT' ? row.employeeCount : null,
+  ),
   grossAmount: sumMoneyColumn(rows.value, (row) => row.grossAmount),
   deductionAmount: sumMoneyColumn(rows.value, (row) => row.deductionAmount),
   netAmount: sumMoneyColumn(rows.value, (row) => row.netAmount),
@@ -86,7 +102,9 @@ function summaryMethod({ columns }: { columns: Array<{ property?: string }> }): 
     if (index === 0) return '合计'
     switch (column.property) {
       case 'employeeCount':
-        return String(totals.value.employeeCount)
+        return filters.value.groupBy === 'DEPT' ? String(totals.value.employeeCount) : '—'
+      case 'monthCount':
+        return '—'
       case 'grossAmount':
         return format(totals.value.grossAmount)
       case 'deductionAmount':
@@ -206,6 +224,14 @@ onMounted(() => {
     />
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" class="hint-alert" />
     <el-alert
+      v-if="excludedText"
+      :title="excludedText"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="hint-alert"
+    />
+    <el-alert
       v-if="!loading && !loadError && rows.length === 0"
       title="仅统计已锁定（LOCKED）与已归档期间；所选年度没有已锁定数据时为空属正常"
       type="info"
@@ -231,7 +257,18 @@ onMounted(() => {
         <el-table-column prop="empNo" label="工号" width="120" />
         <el-table-column prop="empName" label="姓名" width="120" />
       </template>
-      <el-table-column prop="employeeCount" label="人数" width="90" align="right" />
+      <el-table-column
+        v-if="filters.groupBy === 'DEPT'"
+        prop="employeeCount"
+        label="人数"
+        width="90"
+        align="right"
+      >
+        <template #default="{ row }">{{ formatCount(row.employeeCount) }}</template>
+      </el-table-column>
+      <el-table-column v-else prop="monthCount" label="月份数" width="90" align="right">
+        <template #default="{ row }">{{ formatCount(annualCountValue(row, filters.groupBy)) }}</template>
+      </el-table-column>
       <el-table-column prop="grossAmount" label="应发合计" width="160" align="right">
         <template #default="{ row }"><span class="amount-cell">{{ formatOrZero(row.grossAmount) }}</span></template>
       </el-table-column>
@@ -247,7 +284,8 @@ onMounted(() => {
     </el-table>
 
     <div class="footnote muted">
-      人数为去重后的在职人数（同一人跨月只计一次），年度值不等于各月相加。
+      按部门：人数为去重后的在职人数（同一人跨月只计一次），年度值不等于各月相加；
+      按人：月份数表示该员工有工资的月份数。
     </div>
   </div>
 </template>

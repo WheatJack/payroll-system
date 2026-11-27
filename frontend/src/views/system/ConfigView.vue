@@ -23,6 +23,7 @@ const rows = ref<SystemConfig[]>([])
 const loading = ref(false)
 const loadError = ref('')
 
+const hasWarning = computed(() => rows.value.some((row) => !!row.warning))
 const dialogVisible = ref(false)
 const editing = ref<SystemConfig | null>(null)
 const draftValue = ref('')
@@ -113,6 +114,12 @@ onMounted(load)
           <span class="config-value" :class="{ 'is-readonly': !row.editable }">{{ row.value || '—' }}</span>
         </template>
       </el-table-column>
+      <el-table-column v-if="hasWarning" label="警示" min-width="200">
+        <template #default="{ row }">
+          <span v-if="row.warning" class="config-warning">{{ row.warning }}</span>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="类型" width="120">
         <template #default="{ row }">{{ typeLabel(row.valueType) }}</template>
       </el-table-column>
@@ -201,6 +208,11 @@ onMounted(load)
 }
 .config-value.is-readonly {
   color: #a8abb2;
+}
+.config-warning {
+  color: #e6a23c;
+  font-size: 12px;
+  line-height: 18px;
 }
 .field-hint {
   font-size: 12px;

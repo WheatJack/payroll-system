@@ -14,7 +14,7 @@ import type { MonthlyReportRow } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
 import { format, formatOrZero } from '@/utils/money'
-import { sumCountColumn, sumMoneyColumn, validateMonthlyFilters } from '@/utils/report'
+import { formatExcludedPeriods, sumCountColumn, sumMoneyColumn, validateMonthlyFilters } from '@/utils/report'
 import { buildMonthlyParams } from '@/utils/export'
 import { createLatestOnly } from '@/utils/latest'
 
@@ -43,6 +43,9 @@ const filters = ref({
 })
 
 const rows = ref<MonthlyReportRow[]>([])
+/** 有明细但未锁定、未计入统计的期间（v1.2 起由后端返回，必须展示） */
+const excludedPeriods = ref<string[]>([])
+const excludedText = computed(() => formatExcludedPeriods(excludedPeriods.value))
 const loading = ref(false)
 const exporting = ref(false)
 const loadError = ref('')
@@ -59,16 +62,19 @@ async function query() {
   loading.value = true
   loadError.value = ''
   try {
-    const data = await reportApi.getMonthlyReport({
+    const result = await reportApi.getMonthlyReport({
       periodYm: filters.value.periodYm,
       ...(filters.value.companyId ? { companyId: filters.value.companyId } : {}),
       ...(filters.value.deptId ? { deptId: filters.value.deptId } : {}),
     })
     if (!latest.isLatest(token)) return
-    rows.value = data
+    // v1.2：响应从数组改为 { rows, excludedPeriods }
+    rows.value = result.rows
+    excludedPeriods.value = result.excludedPeriods ?? []
   } catch (error) {
     if (!latest.isLatest(token)) return
     rows.value = []
+    excludedPeriods.value = []
     loadError.value = isApiError(error) ? error.message : '月度汇总加载失败'
     ElMessage.error(loadError.value)
   } finally {
@@ -181,6 +187,14 @@ onMounted(() => {
       class="list-error"
     />
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false" class="list-error" />
+    <el-alert
+      v-if="excludedText"
+      :title="excludedText"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="list-error"
+    />
     <el-alert
       v-if="!loading && !loadError && rows.length === 0"
       title="仅统计已锁定（LOCKED）与已归档期间；所选期间尚未锁定时为空属正常"

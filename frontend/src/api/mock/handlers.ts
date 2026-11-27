@@ -554,6 +554,10 @@ export const handlers = [
       success: finished ? 1 : 0,
       failed: 0,
       errors: [],
+      // 业务警告：不足月折算 + 节假日未配置（直接关系到会不会多发钱）
+      warnings: finished
+        ? ['本期有 1 人按不足月折算，但法定节假日未配置，折算天数可能偏多']
+        : [],
       skipped: { E999: '未配置薪酬档案' },
     }
     return ok(progress)
@@ -754,12 +758,20 @@ export const handlers = [
     const search = new URL(request.url).searchParams
     const periodYm = search.get('periodYm')
     if (!periodYm) return fail(400, 'periodYm 不能为空')
-    const companyId = search.get('companyId')
+    const companyId = search.get('companyId') ?? DEMO_USER.companyId
     const deptId = search.get('deptId')
-    const rows = MONTHLY_REPORT_ROWS.filter((row) => row.periodYm === periodYm)
-      .filter((row) => (companyId ? row.companyId === companyId : true))
-      .filter((row) => (deptId ? row.deptId === deptId : true))
-    return ok(rows)
+    // 模拟 v1.2 口径：只有 LOCKED/ARCHIVED 期间计入统计；未锁定的期间进入 excludedPeriods
+    const period = state.periods.find(
+      (item) => item.periodYm === periodYm && item.companyId === companyId,
+    )
+    const counted = period !== undefined && (period.status === 'LOCKED' || period.status === 'ARCHIVED')
+    const rows = counted
+      ? MONTHLY_REPORT_ROWS.filter((row) => row.periodYm === periodYm)
+          .filter((row) => row.companyId === companyId)
+          .filter((row) => (deptId ? row.deptId === deptId : true))
+      : []
+    const excludedPeriods = period && !counted ? [period.periodYm] : []
+    return ok({ rows, excludedPeriods })
   }),
 
   http.get(`${API}/reports/annual`, ({ request }) => {
@@ -774,8 +786,15 @@ export const handlers = [
     if (groupBy === 'DEPT' && currentUserOf(request)?.dataScope === 'ALL' && !companyId) {
       return fail(400, '集团范围按部门汇总必须提供 companyId')
     }
-    const rows = groupBy === 'EMP' ? ANNUAL_REPORT_EMP_ROWS : ANNUAL_REPORT_ROWS
-    return ok(rows.filter((row) => row.year === year))
+    const rows = (groupBy === 'EMP' ? ANNUAL_REPORT_EMP_ROWS : ANNUAL_REPORT_ROWS).filter(
+      (row) => row.year === year,
+    )
+    const excludedPeriods = state.periods
+      .filter((period) => period.periodYm.startsWith(`${year}-`))
+      .filter((period) => period.status === 'DRAFT' || period.status === 'EDITING')
+      .map((period) => period.periodYm)
+      .sort()
+    return ok({ rows, excludedPeriods })
   }),
 
   http.post(`${API}/reports/export`, async ({ request }) => {

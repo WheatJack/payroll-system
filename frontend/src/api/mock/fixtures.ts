@@ -253,13 +253,14 @@ export const MONTHLY_REPORT_ROWS = [
 ]
 
 export const ANNUAL_REPORT_ROWS = [
-  { year: '2026', groupBy: 'DEPT', deptId: '1', deptName: '北京研发部', employeeCount: 2, grossAmount: '17100.00', deductionAmount: '4250.00', netAmount: '12850.00' },
-  { year: '2026', groupBy: 'DEPT', deptId: '2', deptName: '北京财务部', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+  { year: '2026', groupBy: 'DEPT', deptId: '1', deptName: '北京研发部', employeeCount: 2, monthCount: null, grossAmount: '17100.00', deductionAmount: '4250.00', netAmount: '12850.00' },
+  { year: '2026', groupBy: 'DEPT', deptId: '2', deptName: '北京财务部', employeeCount: 1, monthCount: null, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
 ]
 
 export const ANNUAL_REPORT_EMP_ROWS = [
-  { year: '2026', groupBy: 'EMP', employeeId: '1', empNo: 'E001', empName: '张三', employeeCount: 1, grossAmount: '8600.00', deductionAmount: '2150.00', netAmount: '6450.00' },
-  { year: '2026', groupBy: 'EMP', employeeId: '2', empNo: 'E002', empName: '李四', employeeCount: 1, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
+  // 按人分组：employeeCount 为 null，月份数见 monthCount（v1.2 语义）
+  { year: '2026', groupBy: 'EMP', employeeId: '1', empNo: 'E001', empName: '张三', employeeCount: null, monthCount: 12, grossAmount: '8600.00', deductionAmount: '2150.00', netAmount: '6450.00' },
+  { year: '2026', groupBy: 'EMP', employeeId: '2', empNo: 'E002', empName: '李四', employeeCount: null, monthCount: 6, grossAmount: '7200.00', deductionAmount: '1800.00', netAmount: '5400.00' },
 ]
 
 /* ------------------------- 系统管理（M1.5） ------------------------- */
@@ -363,38 +364,36 @@ export const USERS: User[] = [
 
 export const CONFIGS: SystemConfig[] = [
   {
-    key: 'STANDARD_WORK_DAYS',
+    key: 'payroll.monthly-payable-days',
     value: '21.75',
     valueType: 'DECIMAL',
-    description: '月计薪天数',
+    description: '月平均计薪天数',
     editable: true,
+    warning: null,
   },
   {
-    key: 'SENIORITY_PAY_PER_YEAR',
-    value: '50.00',
+    key: 'payroll.seniority-pay-per-year',
+    value: '100',
     valueType: 'DECIMAL',
-    description: '工龄工资标准（元/年）',
+    description: '工龄工资每年金额',
     editable: true,
+    warning: null,
   },
   {
-    key: 'LATE_GRACE_MINUTES',
-    value: '30',
-    valueType: 'INT',
-    description: '迟到宽限分钟数',
-    editable: true,
-  },
-  {
-    key: 'LEGAL_HOLIDAYS',
-    value: '2026-01-01,2026-02-17,2026-10-01',
+    key: 'payroll.calendar.holidays',
+    value: '',
     valueType: 'DATE_LIST',
     description: '法定节假日（用于计薪天数）',
     editable: true,
+    warning: '未配置法定节假日，不足月折算只排除周末',
   },
   {
-    key: 'PAYSLIP_FOOTER',
+    key: 'payroll.payslip-footer',
     value: '本公司工资保密，请勿外传',
     valueType: 'STRING',
     description: '工资条页脚文案',
     editable: false,
+    warning: null,
   },
 ]
+

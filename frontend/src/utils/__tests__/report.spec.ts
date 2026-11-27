@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest'
-import { sumCountColumn, sumMoneyColumn, validateAnnualFilters, validateMonthlyFilters } from '../report'
+import {
+  annualCountLabel,
+  annualCountValue,
+  formatCount,
+  formatExcludedPeriods,
+  sumCountColumn,
+  sumMoneyColumn,
+  validateAnnualFilters,
+  validateMonthlyFilters,
+} from '../report'
 
 describe('报表筛选校验', () => {
   test('月度必须选择合法年月', () => {
@@ -51,5 +60,35 @@ describe('报表合计', () => {
 
   test('人数列是整数求和', () => {
     expect(sumCountColumn([{ n: 1 }, { n: 2 }, {}], (row) => row.n)).toBe(3)
+  })
+})
+
+
+describe('报表 v1.2 结构（excludedPeriods / 月份数）', () => {
+  test('未锁定期间的提示文案', () => {
+    expect(formatExcludedPeriods(['2025-01'])).toBe('2025-01 已有工资数据但未锁定，未计入本次统计')
+    expect(formatExcludedPeriods(['2025-01', '2025-02'])).toBe('2025-01、2025-02 已有工资数据但未锁定，未计入本次统计')
+    expect(formatExcludedPeriods([])).toBeNull()
+    expect(formatExcludedPeriods(null)).toBeNull()
+    expect(formatExcludedPeriods(['  '])).toBeNull()
+  })
+
+  test('年度计数列：按人看 monthCount，按部门看 employeeCount', () => {
+    const empRow = { employeeCount: null, monthCount: 12 }
+    const deptRow = { employeeCount: 3, monthCount: null }
+    expect(annualCountLabel('EMP')).toBe('月份数')
+    expect(annualCountLabel('DEPT')).toBe('人数')
+    expect(annualCountValue(empRow as never, 'EMP')).toBe(12)
+    expect(annualCountValue(empRow as never, 'DEPT')).toBeNull()
+    expect(annualCountValue(deptRow as never, 'DEPT')).toBe(3)
+    expect(annualCountValue(deptRow as never, 'EMP')).toBeNull()
+  })
+
+  test('计数 null/undefined 显示 — 而不是 NaN', () => {
+    expect(formatCount(null)).toBe('—')
+    expect(formatCount(undefined)).toBe('—')
+    expect(formatCount(Number.NaN)).toBe('—')
+    expect(formatCount(0)).toBe('0')
+    expect(formatCount(12)).toBe('12')
   })
 })

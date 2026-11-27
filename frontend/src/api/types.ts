@@ -517,6 +517,8 @@ export interface paths {
          * @description 需要 `payroll:record:view`。按部门汇总的月度数据；仅统计 `LOCKED` 与
          *     `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
          *     `COMPANY`/`ALL`）过滤。
+         *     响应 `data` 为 `{rows, excludedPeriods}`；`excludedPeriods` 列出范围内
+         *     有明细但因未锁定（`DRAFT`/`EDITING`）而未纳入统计的期间（非集团账号只列本主体）。
          */
         get: operations["getMonthlyReport"];
         put?: never;
@@ -539,6 +541,8 @@ export interface paths {
          * @description 需要 `payroll:record:view`。按人或按部门汇总的年度数据；仅统计 `LOCKED` 与
          *     `ARCHIVED` 期间，并按当前用户的数据范围（`SELF`/`DEPT`/`DEPT_SUB`/
          *     `COMPANY`/`ALL`）过滤。
+         *     响应 `data` 为 `{rows, excludedPeriods}`；`excludedPeriods` 列出范围内
+         *     有明细但因未锁定（`DRAFT`/`EDITING`）而未纳入统计的期间（非集团账号只列本主体）。
          *     `groupBy=DEPT` 且操作者数据范围含多个主体时 `companyId` 必填，缺则 400。
          */
         get: operations["getAnnualReport"];
@@ -1331,6 +1335,11 @@ export interface components {
             failed: number;
             errors: components["schemas"]["RunError"][];
             /**
+             * @description 生成时的业务警告，如「本期有 N 人按不足月折算，但法定节假日未配置」；
+             *     无警告时为空数组。
+             */
+            warnings?: string[];
+            /**
              * @description 被跳过的人员，键为工号，值为原因（如“未配置薪酬档案”）
              * @example {
              *       "E999": "未配置薪酬档案"
@@ -1481,8 +1490,9 @@ export interface components {
         /**
          * @description 仅统计 `LOCKED` 与 `ARCHIVED` 期间；年度按**归属期间**归集，
          *     13 薪与年终奖计入其归属月份所在年度。
-         *     `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
-         *     因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验。
+         *     按部门分组时 `employeeCount` 为**去重后的在职人数**（同一人跨月只计一次），
+         *     因此年度值不等于各月相加，前端不得用「年度值 ÷ 12」做校验；
+         *     按人分组时 `employeeCount` 为 null，月份数见 `monthCount`。
          */
         AnnualReportRow: {
             /** @example 2026 */
@@ -1494,10 +1504,31 @@ export interface components {
             employeeId?: string | null;
             empNo?: string | null;
             empName?: string | null;
-            employeeCount: number;
+            /** @description 按部门分组时为去重后的在职人数；按人分组时为 null */
+            employeeCount: number | null;
+            /** @description 按人分组时表示该员工有工资的月份数；按部门分组时为 null */
+            monthCount?: number | null;
             grossAmount: components["schemas"]["Money"];
             deductionAmount: components["schemas"]["Money"];
             netAmount: components["schemas"]["Money"];
+        };
+        /**
+         * @description 月度汇总结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+         *     （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+         */
+        MonthlyReportResult: {
+            rows: components["schemas"]["MonthlyReportRow"][];
+            /** @description 未纳入统计的期间（`periodYm`） */
+            excludedPeriods: string[];
+        };
+        /**
+         * @description 年度汇总结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+         *     （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+         */
+        AnnualReportResult: {
+            rows: components["schemas"]["AnnualReportRow"][];
+            /** @description 未纳入统计的期间（`periodYm`） */
+            excludedPeriods: string[];
         };
         /**
          * @description 查询条件，按 `reportType` 取用不同字段：
@@ -1552,6 +1583,11 @@ export interface components {
             description: string;
             /** @description false 时修改返回 403 */
             editable: boolean;
+            /**
+             * @description 参数值有问题时的警示文案（如法定节假日为空），正常时为 null
+             * @example 法定节假日未配置，将按默认计薪天数计算
+             */
+            warning?: string | null;
         };
         ConfigUpdateRequest: {
             /**
@@ -1857,13 +1893,13 @@ export interface components {
             code: components["schemas"]["ErrorCode"];
             /** @example ok */
             msg: string;
-            data: components["schemas"]["MonthlyReportRow"][];
+            data: components["schemas"]["MonthlyReportResult"];
         };
         ResultAnnualReport: {
             code: components["schemas"]["ErrorCode"];
             /** @example ok */
             msg: string;
-            data: components["schemas"]["AnnualReportRow"][];
+            data: components["schemas"]["AnnualReportResult"];
         };
         ResultCompany: {
             code: components["schemas"]["ErrorCode"];

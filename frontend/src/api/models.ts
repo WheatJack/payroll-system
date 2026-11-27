@@ -94,3 +94,9 @@ export type CompanyCreateRequest = S['CompanyCreateRequest']
 export type CompanyUpdateRequest = S['CompanyUpdateRequest']
 export type DeptCreateRequest = S['DeptCreateRequest']
 export type DeptUpdateRequest = S['DeptUpdateRequest']
+
+// v1.2：报表结果对象 / 系统参数
+export type MonthlyReportResult = S['MonthlyReportResult']
+export type AnnualReportResult = S['AnnualReportResult']
+export type ConfigItem = S['ConfigItem']
+export type ConfigValueType = S['ConfigValueType']

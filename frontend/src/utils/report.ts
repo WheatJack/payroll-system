@@ -6,7 +6,7 @@
  *   前端拿到什么就显示什么，**不要在前端再做范围/状态过滤**。
  * - `employeeCount` 是去重人数，年度值不等于各月相加，不能用「年度 ÷ 12」反推。
  */
-import type { DataScope, ReportGroupBy } from '@/api/models'
+import type { AnnualReportRow, DataScope, ReportGroupBy } from '@/api/models'
 import { coerce, sum } from './money'
 
 const PERIOD_YM = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -60,4 +60,36 @@ export function sumMoneyColumn<T>(rows: readonly T[], pick: (row: T) => string |
 /** 人数列合计（整数，非金额）。 */
 export function sumCountColumn<T>(rows: readonly T[], pick: (row: T) => number | null | undefined): number {
   return rows.reduce((total, row) => total + (pick(row) ?? 0), 0)
+}
+
+
+/* ------------------------------ v1.2 报表结构 ------------------------------ */
+
+/**
+ * 「有明细但未锁定、未计入统计」的期间提示。
+ * 之前这些月份被静默跳过，用户会以为报表算错了，必须显式展示。
+ */
+export function formatExcludedPeriods(periods: readonly string[] | null | undefined): string | null {
+  const list = (periods ?? []).map((period) => period.trim()).filter((period) => period !== '')
+  if (list.length === 0) return null
+  return `${list.join('、')} 已有工资数据但未锁定，未计入本次统计`
+}
+
+/** 年度按人看「月份数」，按部门看「人数」。 */
+export function annualCountLabel(groupBy: ReportGroupBy): string {
+  return groupBy === 'EMP' ? '月份数' : '人数'
+}
+
+/**
+ * 年度行的计数列取值：EMP 取 monthCount（可能为 null），DEPT 取 employeeCount。
+ * null 一律返回 null（由 formatCount 显示 —），绝不能显示 NaN。
+ */
+export function annualCountValue(row: AnnualReportRow, groupBy: ReportGroupBy): number | null {
+  const value = groupBy === 'EMP' ? row.monthCount : row.employeeCount
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** 计数展示：null/undefined/非数值 → — */
+export function formatCount(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '—'
 }

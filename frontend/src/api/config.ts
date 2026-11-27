@@ -1,23 +1,13 @@
 /**
  * 系统参数（sys_config）。
  *
- * ⚠️ 契约 v1.1 (docs/api/openapi.yaml) 还没有 configs 端点——后端正在实现，
- * 形状由控制方给定：
- *   GET  /api/v1/configs            -> [{ key, value, valueType, description, editable }]
- *   PUT  /api/v1/configs/{key}      <- { value }
- * 这里先按该形状写本地类型；契约冻结后应改为由 openapi-typescript 生成。
+ * 类型来自冻结契约（openapi.yaml -> api/types.ts 的 ConfigItem / ConfigValueType）。
  */
 import { api } from './client'
+import type { ConfigItem, ConfigValueType } from './models'
 
-export type ConfigValueType = 'DECIMAL' | 'INT' | 'DATE_LIST' | 'STRING'
-
-export interface SystemConfig {
-  key: string
-  value: string
-  valueType: ConfigValueType
-  description: string
-  editable: boolean
-}
+export type SystemConfig = ConfigItem
+export type { ConfigValueType }
 
 export function listConfigs(): Promise<SystemConfig[]> {
   return api.get<SystemConfig[]>('/configs')

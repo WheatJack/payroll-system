@@ -8,6 +8,7 @@ import { isApiError } from '@/api/client'
 import type { Period, PeriodStatus, RunProgress } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { formatOrZero } from '@/utils/money'
+import { normalizeWarnings } from '@/utils/run'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -306,6 +307,16 @@ onMounted(load)
         <span class="fail">失败 {{ runProgress?.failed ?? 0 }}</span>
       </div>
 
+      <el-alert
+        v-for="(warning, index) in normalizeWarnings(runProgress?.warnings)"
+        :key="`run-warning-${index}`"
+        :title="warning"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="run-warning"
+      />
+
       <div v-if="runProgress?.errors?.length" class="run-block">
         <div class="run-block-title">失败明细</div>
         <el-table :data="runProgress.errors" size="small" border max-height="180">
@@ -380,6 +391,9 @@ onMounted(load)
 }
 .run-counts .fail {
   color: #f56c6c;
+}
+.run-warning {
+  margin-top: 10px;
 }
 .run-block {
   margin-top: 16px;
