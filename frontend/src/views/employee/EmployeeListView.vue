@@ -5,6 +5,7 @@ import { Plus, Search } from '@element-plus/icons-vue'
 import * as employeeApi from '@/api/employee'
 import { listDepts } from '@/api/org'
 import { isApiError } from '@/api/client'
+import { createLatestOnly } from '@/utils/latest'
 import type { Employee, EmployeeType } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, type DeptNode } from '@/utils/labels'
@@ -31,6 +32,9 @@ const loadError = ref('')
 
 const deptTree = ref<DeptNode[]>([])
 
+/** 列表请求竞态守卫：旧响应不能覆盖新筛选结果（I-8） */
+const loadGuard = createLatestOnly()
+
 const dialogVisible = ref(false)
 const editing = ref<Employee | null>(null)
 
@@ -47,21 +51,24 @@ const query = computed<employeeApi.EmployeeQuery>(() => {
 })
 
 async function load() {
+  const token = loadGuard.next()
   loading.value = true
   loadError.value = ''
   try {
     const page = await employeeApi.listEmployees(query.value)
+    if (!loadGuard.isLatest(token)) return
     rows.value = page.records
     total.value = page.total
     current.value = page.current
     size.value = page.size
   } catch (error) {
+    if (!loadGuard.isLatest(token)) return
     rows.value = []
     total.value = 0
     loadError.value = isApiError(error) ? error.message : '人员列表加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (loadGuard.isLatest(token)) loading.value = false
   }
 }
 

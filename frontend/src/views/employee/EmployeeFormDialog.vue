@@ -50,8 +50,10 @@ async function loadDeptOptions(): Promise<void> {
   loadingDepts.value = true
   try {
     deptOptions.value = buildDeptTree(await listDepts(deptCompanyId.value))
-  } catch {
+  } catch (error) {
+    console.error('[payroll] 人员表单部门加载失败', error)
     deptOptions.value = []
+    ElMessage.warning('部门加载失败，暂时无法选择部门')
   } finally {
     loadingDepts.value = false
   }

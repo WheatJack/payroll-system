@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import * as itemApi from '@/api/item'
 import { isApiError } from '@/api/client'
+import { createLatestOnly } from '@/utils/latest'
 import type { PayItem, PayItemCategory, PayItemDataType, PayDirection } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 
@@ -27,6 +28,8 @@ const filters = reactive({ category: '' as PayItemCategory | '', status: '' as 0
 const rows = ref<PayItem[]>([])
 const loading = ref(false)
 const loadError = ref('')
+/** 列表请求竞态守卫（I-8） */
+const loadGuard = createLatestOnly()
 
 const dialogVisible = ref(false)
 const editing = ref<PayItem | null>(null)
@@ -60,19 +63,23 @@ function dataTypeLabel(dataType: PayItemDataType): string {
 }
 
 async function load() {
+  const token = loadGuard.next()
   loading.value = true
   loadError.value = ''
   try {
-    rows.value = await itemApi.listPayItems({
+    const data = await itemApi.listPayItems({
       ...(filters.category ? { category: filters.category } : {}),
       ...(filters.status !== '' ? { status: filters.status } : {}),
     })
+    if (!loadGuard.isLatest(token)) return
+    rows.value = data
   } catch (error) {
+    if (!loadGuard.isLatest(token)) return
     rows.value = []
     loadError.value = isApiError(error) ? error.message : '工资项加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (loadGuard.isLatest(token)) loading.value = false
   }
 }
 

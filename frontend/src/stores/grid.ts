@@ -44,6 +44,8 @@ export const useGridStore = defineStore('grid', () => {
   const dirty = ref<DirtyMap>({})
   const filter = ref<GridFilter>({})
   const conflictIds = ref<string[]>([])
+  /** 当前数据属于哪个账号（userId）；换账号必须重新拉，禁止复用上一个人的工资行 */
+  const ownerUserId = ref<string>('')
   const loading = ref(false)
   const saving = ref(false)
 
@@ -55,7 +57,7 @@ export const useGridStore = defineStore('grid', () => {
 
   const editableColumns = computed(() => columns.value.filter((column) => column.editable))
 
-  function load(data: GridResponse): void {
+  function load(data: GridResponse, owner = ''): void {
     period.value = data.period
     columns.value = data.columns.map((column) => ({ ...column }))
     rows.value = data.rows.map((row) => ({ ...row, items: { ...row.items } }))
@@ -64,6 +66,12 @@ export const useGridStore = defineStore('grid', () => {
     versions.value = nextVersions
     dirty.value = {}
     conflictIds.value = []
+    ownerUserId.value = owner
+  }
+
+  /** 当前缓存是否属于这个账号（跨账号复用时必须重新加载）。 */
+  function belongsTo(userId: string | null | undefined): boolean {
+    return ownerUserId.value !== '' && ownerUserId.value === (userId ?? '')
   }
 
   function versionOf(recordId: string): number {
@@ -226,6 +234,7 @@ export const useGridStore = defineStore('grid', () => {
     dirty.value = {}
     filter.value = {}
     conflictIds.value = []
+    ownerUserId.value = ''
   }
 
   return {
@@ -236,6 +245,7 @@ export const useGridStore = defineStore('grid', () => {
     dirty,
     filter,
     conflictIds,
+    ownerUserId,
     loading,
     saving,
     rowIndex,
@@ -246,6 +256,7 @@ export const useGridStore = defineStore('grid', () => {
     dirtyRowCount,
     hasChanges,
     load,
+    belongsTo,
     versionOf,
     originalValue,
     valueOf,

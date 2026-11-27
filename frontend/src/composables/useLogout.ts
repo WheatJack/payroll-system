@@ -1,5 +1,6 @@
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useGridStore } from '@/stores/grid'
 
 /**
  * 退出登录：清 token 并**跳转登录页**。
@@ -11,6 +12,8 @@ export function useLogout() {
 
   async function logout(): Promise<void> {
     auth.logout()
+    // 业务 store 也必须清：否则换账号后会看到上一个人的工资行与未保存修改（C-1）
+    useGridStore().reset()
     await router.replace({ name: 'login' })
   }
 

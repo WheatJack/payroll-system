@@ -4,6 +4,7 @@ import {
   annualCountValue,
   formatCount,
   formatExcludedPeriods,
+  paginateRows,
   sumCountColumn,
   sumMoneyColumn,
   validateAnnualFilters,
@@ -90,5 +91,26 @@ describe('报表 v1.2 结构（excludedPeriods / 月份数）', () => {
     expect(formatCount(Number.NaN)).toBe('—')
     expect(formatCount(0)).toBe('0')
     expect(formatCount(12)).toBe('12')
+  })
+})
+
+
+describe('年度报表客户端分页（I-7）', () => {
+  const rows = Array.from({ length: 120 }, (_, index) => index + 1)
+
+  test('按页切片，末页只取剩余行', () => {
+    expect(paginateRows(rows, 1, 50)).toHaveLength(50)
+    expect(paginateRows(rows, 1, 50)[0]).toBe(1)
+    expect(paginateRows(rows, 3, 50)).toEqual(rows.slice(100))
+  })
+
+  test('页码越界自动夹紧到有效范围', () => {
+    expect(paginateRows(rows, 99, 50)[0]).toBe(101)
+    expect(paginateRows(rows, 0, 50)[0]).toBe(1)
+    expect(paginateRows([], 5, 50)).toEqual([])
+  })
+
+  test('非法页大小回退为 1，不会返回全部', () => {
+    expect(paginateRows(rows, 1, 0)).toHaveLength(1)
   })
 })

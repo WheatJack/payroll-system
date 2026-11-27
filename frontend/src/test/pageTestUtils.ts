@@ -7,10 +7,11 @@
 import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import VXETable from 'vxe-table'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { defineComponent, type Component } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { DEMO_TOKEN, DEMO_USER } from '@/api/mock/fixtures'
+import type { CurrentUser } from '@/api/models'
 import { setToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
@@ -40,10 +41,22 @@ export interface MountedPage {
   wrapper: VueWrapper
   router: Router
   auth: ReturnType<typeof useAuthStore>
+  pinia: Pinia
 }
 
-export async function mountPage(component: Component, path = '/'): Promise<MountedPage> {
-  const pinia = createPinia()
+export interface MountPageOptions {
+  /** 复用同一个 pinia（跨账号用例需要保留 store 状态） */
+  pinia?: Pinia
+  /** 覆盖登录用户（默认 DEMO_USER） */
+  authUser?: CurrentUser
+}
+
+export async function mountPage(
+  component: Component,
+  path = '/',
+  options: MountPageOptions = {},
+): Promise<MountedPage> {
+  const pinia = options.pinia ?? createPinia()
   setActivePinia(pinia)
   const router = createRouter({ history: createMemoryHistory(), routes })
   await router.push(path)
@@ -53,7 +66,7 @@ export async function mountPage(component: Component, path = '/'): Promise<Mount
   // 请求拦截器从 localStorage 取 token，测试里必须同时写入，否则所有需要认证的接口会 401
   setToken(DEMO_TOKEN)
   auth.token = DEMO_TOKEN
-  auth.applyUser(DEMO_USER)
+  auth.applyUser(options.authUser ?? DEMO_USER)
 
   const wrapper = mount(component, {
     // vxe-table 在 main.ts 里是全局注册的，测试必须同样注册，否则编制台渲染不出表格
@@ -61,7 +74,7 @@ export async function mountPage(component: Component, path = '/'): Promise<Mount
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper, router, auth }
+  return { wrapper, router, auth, pinia }
 }
 
 /** 轮询等待条件成立（默认 3s），返回条件值。 */

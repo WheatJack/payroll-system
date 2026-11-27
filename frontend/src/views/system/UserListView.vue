@@ -8,15 +8,41 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import * as systemApi from '@/api/system'
 import { isApiError } from '@/api/client'
+import { createLatestOnly } from '@/utils/latest'
 import type { Role, User, UserCreateRequest } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useOrgOptions } from '@/composables/useOrgOptions'
 import { dataScopeLabel, validatePassword } from '@/utils/system'
+import { listDepts } from '@/api/org'
+import { buildDeptTree, type DeptNode } from '@/utils/labels'
 
 const auth = useAuthStore()
 const canEdit = computed(() => auth.has('sys:user:edit'))
+/** 角色下拉依赖 GET /roles（需要 sys:role:view）；没有权限时不要静默 403 */
+const canViewRoles = computed(() => auth.has('sys:role:view'))
 
 const { companies, deptTree, loadCompanies, loadDepts } = useOrgOptions()
+
+/** 用户弹窗自己的部门树：按「被编辑用户的主体」加载，不与左侧筛选器共用（I-3） */
+const formDeptTree = ref<DeptNode[]>([])
+const loadingFormDepts = ref(false)
+
+async function loadFormDepts(companyId: string): Promise<void> {
+  if (!companyId) {
+    formDeptTree.value = []
+    return
+  }
+  loadingFormDepts.value = true
+  try {
+    formDeptTree.value = buildDeptTree(await listDepts(companyId))
+  } catch (error) {
+    console.error('[payroll] 用户表单部门加载失败', error)
+    ElMessage.warning('用户所属主体的部门加载失败，部门暂不可选')
+    formDeptTree.value = []
+  } finally {
+    loadingFormDepts.value = false
+  }
+}
 
 const filters = reactive({ keyword: '', companyId: '', deptId: '', status: '' as 0 | 1 | '' })
 const rows = ref<User[]>([])
@@ -26,6 +52,8 @@ const current = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
+/** 列表请求竞态守卫（I-8） */
+const loadGuard = createLatestOnly()
 
 const dialogVisible = ref(false)
 const editing = ref<User | null>(null)
@@ -58,28 +86,37 @@ const query = computed(() => ({
 }))
 
 async function load() {
+  const token = loadGuard.next()
   loading.value = true
   loadError.value = ''
   try {
     const page = await systemApi.listUsers(query.value)
+    if (!loadGuard.isLatest(token)) return
     rows.value = page.records
     total.value = page.total
     current.value = page.current
     size.value = page.size
   } catch (error) {
+    if (!loadGuard.isLatest(token)) return
     rows.value = []
     loadError.value = isApiError(error) ? error.message : '用户列表加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (loadGuard.isLatest(token)) loading.value = false
   }
 }
 
 async function loadRoles(companyId = filters.companyId || auth.companyId) {
+  if (!canViewRoles.value) {
+    roles.value = []
+    return
+  }
   try {
     roles.value = await systemApi.listRoles(companyId ? { companyId } : {})
-  } catch {
+  } catch (error) {
+    console.error('[payroll] 角色列表加载失败', error)
     roles.value = []
+    ElMessage.warning('角色列表加载失败，暂时无法分配角色')
   }
 }
 
@@ -111,6 +148,7 @@ function openCreate() {
   formError.value = ''
   dialogVisible.value = true
   void loadRoles(auth.companyId)
+  void loadFormDepts(auth.companyId)
 }
 
 function openEdit(row: User) {
@@ -128,6 +166,7 @@ function openEdit(row: User) {
   formError.value = ''
   dialogVisible.value = true
   void loadRoles(row.companyId)
+  void loadFormDepts(row.companyId)
 }
 
 async function submit() {
@@ -159,6 +198,10 @@ async function submit() {
         roleIds: form.roleIds,
       })
       ElMessage.success(`已更新用户 ${updated.username}`)
+      // 改到自己账号（角色/停用状态）时刷新权限点，菜单与按钮立即同步（I-11）
+      if (editing.value.id === auth.user?.userId) {
+        await auth.fetchMe().catch((error) => console.error('[payroll] 刷新当前用户权限失败', error))
+      }
     } else {
       const payload: UserCreateRequest = {
         companyId: form.companyId,
@@ -243,7 +286,7 @@ watch(
     if (!dialogVisible.value) return
     form.deptId = ''
     form.roleIds = []
-    void loadDepts(companyId)
+    void loadFormDepts(companyId)
     void loadRoles(companyId)
   },
 )
@@ -363,7 +406,8 @@ onMounted(() => {
         <el-form-item label="部门">
           <el-tree-select
             v-model="form.deptId"
-            :data="deptTree"
+            :data="formDeptTree"
+            :loading="loadingFormDepts"
             check-strictly
             clearable
             :render-after-expand="false"
@@ -374,9 +418,17 @@ onMounted(() => {
           <el-input v-model="form.employeeId" placeholder="人员 ID（可空）" />
         </el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="form.roleIds" multiple collapse-tags style="width: 100%" placeholder="可多选">
+          <el-select
+            v-model="form.roleIds"
+            multiple
+            collapse-tags
+            :disabled="!canViewRoles"
+            style="width: 100%"
+            :placeholder="canViewRoles ? '可多选' : '无角色查看权限'"
+          >
             <el-option v-for="role in roles" :key="role.id" :value="role.id" :label="`${role.roleName}（${role.roleCode}）`" />
           </el-select>
+          <div v-if="!canViewRoles" class="field-hint">当前账号缺少 sys:role:view 权限，无法分配角色</div>
         </el-form-item>
         <el-form-item label="状态">
           <el-radio-group v-model="form.status">

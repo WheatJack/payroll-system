@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { formatOrZero } from '@/utils/money'
 import { normalizeWarnings } from '@/utils/run'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { createLatestOnly } from '@/utils/latest'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -29,6 +30,8 @@ const STATUS_META: Record<PeriodStatus, { label: string; type: 'info' | 'primary
 const rows = ref<Period[]>([])
 const loading = ref(false)
 const loadError = ref('')
+/** 列表/静默刷新共用的竞态守卫（I-8） */
+const loadGuard = createLatestOnly()
 
 /* ---------- 新建期间 ---------- */
 const createVisible = ref(false)
@@ -64,16 +67,20 @@ function statusMeta(status: PeriodStatus) {
 }
 
 async function load() {
+  const token = loadGuard.next()
   loading.value = true
   loadError.value = ''
   try {
-    rows.value = await periodApi.listPeriods(auth.companyId || undefined)
+    const data = await periodApi.listPeriods(auth.companyId || undefined)
+    if (!loadGuard.isLatest(token)) return
+    rows.value = data
   } catch (error) {
+    if (!loadGuard.isLatest(token)) return
     rows.value = []
     loadError.value = isApiError(error) ? error.message : '期间列表加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (loadGuard.isLatest(token)) loading.value = false
   }
 }
 
@@ -82,10 +89,14 @@ async function load() {
  * 失败不打扰用户——手动刷新与下一次轮询会再试。
  */
 async function silentRefresh() {
+  const token = loadGuard.next()
   try {
-    rows.value = await periodApi.listPeriods(auth.companyId || undefined)
-  } catch {
-    // 静默失败
+    const data = await periodApi.listPeriods(auth.companyId || undefined)
+    if (!loadGuard.isLatest(token)) return
+    rows.value = data
+  } catch (error) {
+    // 静默刷新失败不打扰用户，但要留痕
+    console.error('[payroll] 期间列表静默刷新失败', error)
   }
 }
 

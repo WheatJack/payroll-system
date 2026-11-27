@@ -20,6 +20,7 @@ import {
   annualCountValue,
   formatCount,
   formatExcludedPeriods,
+  paginateRows,
   sumCountColumn,
   sumMoneyColumn,
   validateAnnualFilters,
@@ -47,6 +48,10 @@ const filters = ref<{ year: string; groupBy: ReportGroupBy; companyId: string; d
 })
 
 const rows = ref<AnnualReportRow[]>([])
+/** 按人分组可能有 2000+ 行：客户端分页，避免一次性渲染（I-7） */
+const currentPage = ref(1)
+const pageSize = ref(50)
+const pagedRows = computed(() => paginateRows(rows.value, currentPage.value, pageSize.value))
 /** 有明细但未锁定、未计入统计的期间（v1.2 起由后端返回，必须展示） */
 const excludedPeriods = ref<string[]>([])
 const excludedText = computed(() => formatExcludedPeriods(excludedPeriods.value))
@@ -76,10 +81,12 @@ async function query() {
     // v1.2：响应从数组改为 { rows, excludedPeriods }
     rows.value = result.rows
     excludedPeriods.value = result.excludedPeriods ?? []
+    currentPage.value = 1
   } catch (error) {
     if (!latest.isLatest(token)) return
     rows.value = []
     excludedPeriods.value = []
+    currentPage.value = 1
     loadError.value = isApiError(error) ? error.message : '年度汇总加载失败'
     ElMessage.error(loadError.value)
   } finally {
@@ -164,6 +171,7 @@ watch(
     // 否则「切到 DEPT 且未选主体」时会一直转圈
     loading.value = false
     rows.value = []
+    currentPage.value = 1
     filters.value.deptId = ''
     if (validateAnnualFilters(filters.value, auth.user?.dataScope) === null) {
       void query()
@@ -242,7 +250,7 @@ onMounted(() => {
 
     <el-table
       v-loading="loading"
-      :data="rows"
+      :data="pagedRows"
       border
       stripe
       show-summary
@@ -283,9 +291,20 @@ onMounted(() => {
       </template>
     </el-table>
 
+    <div class="pagination">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="rows.length"
+        :page-sizes="[50, 100, 200]"
+        layout="total, sizes, prev, pager, next"
+        @size-change="currentPage = 1"
+      />
+    </div>
+
     <div class="footnote muted">
       按部门：人数为去重后的在职人数（同一人跨月只计一次），年度值不等于各月相加；
-      按人：月份数表示该员工有工资的月份数。
+      按人：月份数表示该员工有工资的月份数。合计按全部行计算，不受分页影响。
     </div>
   </div>
 </template>
@@ -296,6 +315,11 @@ onMounted(() => {
 }
 .amount-cell {
   font-variant-numeric: tabular-nums;
+}
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 .footnote {
   margin-top: 10px;

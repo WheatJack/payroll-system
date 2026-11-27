@@ -77,8 +77,10 @@ async function load() {
 async function loadPayItems() {
   try {
     payItems.value = await listPayItems({ category: 'FIXED', status: 1 })
-  } catch {
+  } catch (error) {
+    console.error('[payroll] 固定津贴科目加载失败', error)
     payItems.value = []
+    ElMessage.warning('固定津贴科目加载失败，津贴选项可能不完整')
   }
 }
 

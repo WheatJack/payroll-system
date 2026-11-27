@@ -93,3 +93,16 @@ export function annualCountValue(row: AnnualReportRow, groupBy: ReportGroupBy): 
 export function formatCount(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '—'
 }
+
+
+/**
+ * 客户端分页（年度按人报表 2000+ 行时避免一次性渲染）。
+ * page 会被夹紧到 [1, totalPages]，避免筛选/切维度后停在空页。
+ */
+export function paginateRows<T>(rows: readonly T[], page: number, pageSize: number): T[] {
+  const size = Math.max(1, Math.floor(pageSize) || 1)
+  const totalPages = Math.max(1, Math.ceil(rows.length / size))
+  const current = Math.min(Math.max(1, Math.floor(page) || 1), totalPages)
+  const start = (current - 1) * size
+  return rows.slice(start, start + size)
+}

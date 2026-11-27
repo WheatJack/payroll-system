@@ -67,8 +67,10 @@ async function load() {
 async function loadPermissions() {
   try {
     permissions.value = await systemApi.listPermissions()
-  } catch {
+  } catch (error) {
+    console.error('[payroll] 权限点目录加载失败', error)
     permissions.value = []
+    ElMessage.warning('权限点目录加载失败，授权功能暂不可用')
   }
 }
 

@@ -9,7 +9,7 @@
  * - 底部合计按 direction 分别汇总（R9），金额全部走 money
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import * as gridApi from '@/api/grid'
@@ -24,6 +24,8 @@ import { useGridStore } from '@/stores/grid'
 import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
 import { footerTotalLabel, isGridFilterActive } from '@/utils/grid'
+import { debounce } from '@/utils/debounce'
+import { createLatestOnly } from '@/utils/latest'
 import { sumMoneyColumn } from '@/utils/report'
 import { buildPayslipParams, buildPeriodSheetParams, payslipExportBlockedReason } from '@/utils/export'
 import { SENIORITY_TOOLTIP } from '@/utils/employee'
@@ -39,6 +41,11 @@ const loading = ref(false)
 const loadError = ref('')
 const deptTree = ref<DeptNode[]>([])
 const tableRef = ref()
+/** 关键词输入草稿：每次按键不能直接重算整表（2000 行时单次长任务 ~1.9s） */
+const keywordDraft = ref(store.filter.keyword ?? '')
+const applyKeyword = debounce((value: string) => {
+  store.setFilter({ keyword: value })
+}, 300)
 const tableWrap = ref<HTMLElement>()
 
 const STATUS_META: Record<PeriodStatus, { label: string; type: 'info' | 'primary' | 'success' | 'warning' }> = {
@@ -136,23 +143,30 @@ const META_COLUMN_COUNT = META_COLUMNS.length
 
 /* ------------------------------ 加载 ------------------------------ */
 
-async function load(options: { keepDirty?: boolean } = {}) {
+/** 期间切换/旧响应后到的令牌守卫（C-2：A 期间慢响应不能覆盖 B 期间） */
+const loadGuard = createLatestOnly()
+/** 当前 store 里的数据实际来自哪个期间；保存前用它做一致性校验 */
+const loadedPeriodId = ref('')
+
+async function load(): Promise<void> {
   if (!periodId.value) return
+  const targetId = periodId.value
+  const token = loadGuard.next()
   loading.value = true
   loadError.value = ''
   try {
-    const data = await gridApi.getGrid(periodId.value)
-    if (options.keepDirty && store.hasChanges) {
-      // 刷新时必须显式确认，避免静默丢改动
-      store.load(data)
-    } else {
-      store.load(data)
-    }
+    const data = await gridApi.getGrid(targetId)
+    // 期间已切换或有更新的请求：旧响应直接丢弃
+    if (!loadGuard.isLatest(token) || targetId !== periodId.value) return
+    // 记录数据归属账号：换账号后禁止复用上一个人的工资行（C-1）
+    store.load(data, auth.user?.userId ?? '')
+    loadedPeriodId.value = targetId
   } catch (error) {
+    if (!loadGuard.isLatest(token) || targetId !== periodId.value) return
     loadError.value = isApiError(error) ? error.message : '工资表加载失败'
     ElMessage.error(loadError.value)
   } finally {
-    loading.value = false
+    if (loadGuard.isLatest(token)) loading.value = false
   }
 }
 
@@ -202,14 +216,20 @@ function onEditCommitted(row: GridRow, column: GridColumn) {
 
 /* --------------------------- 合计（R9） --------------------------- */
 
-const totalsVersion = ref(0)
+interface GridTotals {
+  perColumn: Record<string, string>
+  gross: string
+  deduction: string
+  net: string
+}
 
-const totals = computed(() => {
-  void totalsVersion.value
+const EMPTY_TOTALS: GridTotals = { perColumn: {}, gross: '0.00', deduction: '0.00', net: '0.00' }
+
+function computeTotals(): GridTotals {
   const perColumn: Record<string, string> = {}
   const sourceRows = store.visibleRows
   for (const column of store.columns) {
-    // sumMoneyColumn 对空串/非法值兜底，避免一格脏数据把整个合计 computed 抛崩
+    // sumMoneyColumn 对空串/非法值兜底，避免一格脏数据把整个合计抛崩
     perColumn[column.itemCode] = sumMoneyColumn(sourceRows, (row) => store.valueOf(row.recordId, column.itemCode))
   }
   const gross = store.columns
@@ -219,7 +239,34 @@ const totals = computed(() => {
     .filter((column) => column.direction === 2)
     .reduce((acc, column) => add(acc, perColumn[column.itemCode]), '0.00')
   return { perColumn, gross, deduction, net: sub(gross, deduction) }
-})
+}
+
+/**
+ * 合计用 ref + 防抖重算（I-2）：
+ * MoneyInput 每敲一个键都会写 dirty，如果 totals 是直接依赖 dirty 的 computed，
+ * 2000 行 × 16 列会在每次按键跑 3 万多次 Decimal 运算，输入即卡死。
+ * 这里输入过程只更新当前单元格，合计 150ms 后统一重算一次。
+ */
+const totals = ref<GridTotals>({ ...EMPTY_TOTALS })
+
+const recalcTotals = debounce(() => {
+  totals.value = computeTotals()
+  void nextTick(() => tableRef.value?.updateFooter?.())
+}, 150)
+
+watch(
+  [() => store.visibleRows, () => store.dirty, () => store.columns, () => store.period?.id],
+  () => recalcTotals(),
+  { immediate: true },
+)
+
+onBeforeUnmount(() => recalcTotals.cancel())
+
+async function refreshTotals() {
+  // 编辑/粘贴后合并到防抖窗口；保存成功用 recalcTotals.flush() 立即刷新
+  recalcTotals()
+  await nextTick()
+}
 
 const filterActive = computed(() => isGridFilterActive(store.filter))
 
@@ -233,12 +280,6 @@ function footerMethod({ columns: footerColumns }: { columns: Array<{ field?: str
     return ''
   })
   return [perColumnRow]
-}
-
-async function refreshTotals() {
-  totalsVersion.value += 1
-  await nextTick()
-  tableRef.value?.updateFooter?.()
 }
 
 /* ------------------------- 区域选择与粘贴 ------------------------- */
@@ -352,6 +393,11 @@ const saving = computed(() => store.saving)
 
 async function save() {
   if (!editable.value) return
+  // 数据来源与当前路由期间必须一致，否则可能把 A 期间的 recordId 发到 B 期间
+  if (!store.period || store.period.id !== periodId.value || loadedPeriodId.value !== periodId.value) {
+    ElMessage.error('期间已切换，已放弃本次保存；请等待当前期间加载完成后再保存')
+    return
+  }
   const request = store.buildRequest()
   if (request.changes.length === 0) {
     ElMessage.info('没有需要保存的修改')
@@ -361,7 +407,9 @@ async function save() {
   try {
     const result = await gridApi.saveChangeset(periodId.value, request)
     store.applySaveResult(result)
-    await refreshTotals()
+    recalcTotals.flush()
+    await nextTick()
+    tableRef.value?.updateFooter?.()
     ElMessage.success(`已保存 ${result.updated} 行`)
   } catch (error) {
     if (isApiError(error) && error.code === 409) {
@@ -384,22 +432,76 @@ async function save() {
 /* ------------------------------ 生命周期 ------------------------------ */
 
 watch(periodId, () => {
+  // 作废在途请求，避免旧期间慢响应覆盖新期间
+  loadGuard.invalidate()
   store.reset()
+  loadedPeriodId.value = ''
   void load()
 })
 
+// 账号切换（含 401 后重新登录）：缓存不属于新账号时重新拉取
+watch(
+  () => auth.user?.userId,
+  (userId) => {
+    if (!store.period) return
+    if (!userId) {
+      // 登出（401 等）：立刻清缓存，避免下一个账号看到旧数据
+      loadGuard.invalidate()
+      store.reset()
+      loadedPeriodId.value = ''
+      return
+    }
+    if (!store.belongsTo(userId)) {
+      loadGuard.invalidate()
+      store.reset()
+      loadedPeriodId.value = ''
+      void load()
+    }
+  },
+)
+
 onMounted(() => {
   document.addEventListener('paste', handlePaste)
-  // 同一期间再次进入时保留未保存编辑；换期间才重新拉取
-  const samePeriod = store.period?.id === periodId.value && store.rows.length > 0
+  window.addEventListener('beforeunload', beforeUnloadHandler)
+  // 同一期间再次进入时保留未保存编辑；换期间或换账号都必须重新拉取
+  const samePeriod =
+    store.period?.id === periodId.value && store.rows.length > 0 && store.belongsTo(auth.user?.userId)
   if (!samePeriod) {
+    store.reset()
+    loadedPeriodId.value = ''
     void load()
   }
   void loadDepts()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
+})
+
+onBeforeUnmount(() => {
   document.removeEventListener('paste', handlePaste)
+})
+
+/** 关闭/刷新页面时提示未保存（I-1） */
+function beforeUnloadHandler(event: BeforeUnloadEvent): void {
+  if (!store.hasChanges) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+/** 路由离开时确认，避免静默丢失未保存修改（I-1） */
+onBeforeRouteLeave(async () => {
+  if (!store.hasChanges) return true
+  try {
+    await ElMessageBox.confirm('有未保存的修改，离开将丢失，确认离开？', '未保存的修改', {
+      confirmButtonText: '离开',
+      cancelButtonText: '继续编辑',
+      type: 'warning',
+    })
+    return true
+  } catch {
+    return false
+  }
 })
 </script>
 
@@ -443,13 +545,24 @@ onBeforeUnmount(() => {
           <el-option v-for="level in store.jobLevelOptions" :key="level" :value="level" :label="level" />
         </el-select>
         <el-input
-          :model-value="store.filter.keyword"
+          v-model="keywordDraft"
           placeholder="工号/姓名"
           clearable
           style="width: 150px"
-          @update:model-value="(value: string) => store.setFilter({ keyword: value })"
+          @update:model-value="applyKeyword"
+          @clear="applyKeyword.flush()"
         />
-        <el-button @click="store.clearFilter()">清除筛选</el-button>
+        <el-button
+          @click="
+            () => {
+              keywordDraft = ''
+              applyKeyword.cancel()
+              store.clearFilter()
+            }
+          "
+        >
+          清除筛选
+        </el-button>
         <el-button :icon="Refresh" @click="refresh">刷新</el-button>
       </div>
       <div class="toolbar-actions">

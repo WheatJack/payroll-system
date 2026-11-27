@@ -10,6 +10,7 @@ import App from './App.vue'
 import router from './router'
 import { registerUnauthorizedHandler, clearToken } from './api/client'
 import { useAuthStore } from './stores/auth'
+import { useGridStore } from './stores/grid'
 import './styles/global.css'
 
 async function bootstrap() {
@@ -35,6 +36,8 @@ async function bootstrap() {
   registerUnauthorizedHandler(() => {
     clearToken()
     useAuthStore(pinia).logout()
+    // 401 后同样清业务缓存，避免换账号/重新登录后复用旧数据（C-1）
+    useGridStore(pinia).reset()
     if (router.currentRoute.value.name !== 'login') {
       void router.replace({ name: 'login' })
     }
