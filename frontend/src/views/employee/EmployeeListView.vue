@@ -8,7 +8,7 @@ import { isApiError } from '@/api/client'
 import type { Employee, EmployeeType } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, type DeptNode } from '@/utils/labels'
-import { employeeDeptLabel, employeeSeniority } from '@/utils/employee'
+import { employeeDeptLabel, employeeSeniority, SENIORITY_TOOLTIP } from '@/utils/employee'
 import EmployeeFormDialog from './EmployeeFormDialog.vue'
 import CompProfilePanel from './CompProfilePanel.vue'
 
@@ -171,7 +171,12 @@ onMounted(() => {
       <el-table-column prop="jobLevel" label="职级" width="80" />
       <el-table-column prop="positionName" label="岗位" min-width="120" show-overflow-tooltip />
       <el-table-column prop="hireDate" label="入职日期" width="110" />
-      <el-table-column label="工龄" width="90" align="right">
+      <el-table-column label="工龄" width="110" align="right">
+        <template #header>
+          <el-tooltip :content="SENIORITY_TOOLTIP" placement="top">
+            <span class="th-tip">工龄 ⓘ</span>
+          </el-tooltip>
+        </template>
         <template #default="{ row }">
           <span class="amount-cell">{{ employeeSeniority(row) }}</span>
         </template>
@@ -216,7 +221,7 @@ onMounted(() => {
       />
     </div>
 
-    <EmployeeFormDialog v-model="dialogVisible" :employee="editing" :dept-tree="deptTree" @saved="onSaved" />
+    <EmployeeFormDialog v-model="dialogVisible" :employee="editing" @saved="onSaved" />
 
     <el-drawer v-model="drawerVisible" :title="`薪酬档案 · ${drawerEmployee?.name ?? ''}`" size="680px" destroy-on-close>
       <CompProfilePanel
@@ -235,6 +240,10 @@ onMounted(() => {
 .masked {
   font-variant-numeric: tabular-nums;
   color: #606266;
+}
+.th-tip {
+  cursor: help;
+  border-bottom: 1px dotted #c0c4cc;
 }
 .pagination {
   display: flex;

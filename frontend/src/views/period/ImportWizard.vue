@@ -311,6 +311,19 @@ onBeforeUnmount(stopPolling)
         </el-button>
         <span class="muted">列头由工资项字典动态生成；单文件 ≤ 10MB、≤ 5 万行</span>
       </div>
+      <div class="template-help">
+        <div class="help-title">填表说明</div>
+        <ul>
+          <li>列头由工资项字典生成，请勿修改列名或调整顺序。</li>
+          <li><strong>工号</strong>必填，且必须是系统中已存在、属于本主体的人员。</li>
+          <li>金额填写数字，最多两位小数，不要带货币符号或千分位（如 <code>1234.50</code>）。</li>
+          <li>日期统一使用 <code>YYYY-MM-DD</code>（如 <code>2026-11-01</code>）。</li>
+          <li>留空的单元格表示本次不填写该项；预校验失败的行不会写入。</li>
+        </ul>
+        <div class="muted help-note">
+          模板 xlsx 由后端生成（列头来自工资项字典）；若要把说明写进文件本身，需要后端在模板首行补充。
+        </div>
+      </div>
     </div>
 
     <div class="import-section">
@@ -452,6 +465,32 @@ onBeforeUnmount(stopPolling)
 .label {
   font-size: 13px;
   color: #606266;
+}
+.template-help {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #f7f9fc;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+.help-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.template-help ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 20px;
+}
+.template-help code {
+  color: #409eff;
+}
+.help-note {
+  margin-top: 6px;
+  font-size: 12px;
 }
 .uploader {
   max-width: 520px;

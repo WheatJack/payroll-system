@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import type { Employee } from '@/api/models'
-import { employeeDeptLabel, employeeSeniority, employeeSocialSeniority } from '../employee'
+import {
+  employeeDeptLabel,
+  employeeSeniority,
+  employeeSocialSeniority,
+  resolveEmployeeCompanyId,
+} from '../employee'
 
 function employee(overrides: Record<string, unknown> = {}): Employee {
   return {
@@ -44,6 +49,12 @@ describe('人员工龄与部门展示', () => {
     expect(employeeSocialSeniority(employee({ socialSeniorityYears: 7.5 }))).toBe('7.50')
     expect(employeeSeniority(employee({ seniorityYears: {} }))).toBe('—')
     expect(employeeSeniority(employee({ seniorityYears: Number.NaN }))).toBe('—')
+  })
+
+  test('部门下拉按员工所属主体过滤：编辑用员工 companyId，新建用当前用户主体', () => {
+    expect(resolveEmployeeCompanyId(employee({ companyId: '2' }), '1')).toBe('2')
+    expect(resolveEmployeeCompanyId(null, '1')).toBe('1')
+    expect(resolveEmployeeCompanyId(employee({ companyId: '' }), '1')).toBe('1')
   })
 
   test('部门优先 deptName，缺失才退回 deptId', () => {

@@ -5,15 +5,22 @@ import { ElMessage } from 'element-plus'
 import * as employeeApi from '@/api/employee'
 import { isApiError } from '@/api/client'
 import type { Employee, EmployeeCreateRequest, EmployeeType, EmployeeUpdateRequest } from '@/api/models'
-import type { DeptNode } from '@/utils/labels'
-import { employeeSeniority, employeeSocialSeniority } from '@/utils/employee'
+import { buildDeptTree, type DeptNode } from '@/utils/labels'
+import { listDepts } from '@/api/org'
+import { useAuthStore } from '@/stores/auth'
+import {
+  employeeSeniority,
+  employeeSocialSeniority,
+  resolveEmployeeCompanyId,
+} from '@/utils/employee'
 
 const props = defineProps<{
   modelValue: boolean
   /** 为空表示新增 */
   employee: Employee | null
-  deptTree: DeptNode[]
 }>()
+
+const auth = useAuthStore()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -29,6 +36,30 @@ const isEdit = computed(() => props.employee !== null)
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 const serverError = ref('')
+
+/** 只加载「该员工所属主体」的部门：后端会拒绝员工部门与主体不一致 */
+const deptOptions = ref<DeptNode[]>([])
+const loadingDepts = ref(false)
+const deptCompanyId = computed(() => resolveEmployeeCompanyId(props.employee, auth.companyId))
+
+async function loadDeptOptions(): Promise<void> {
+  if (!deptCompanyId.value) {
+    deptOptions.value = []
+    return
+  }
+  loadingDepts.value = true
+  try {
+    deptOptions.value = buildDeptTree(await listDepts(deptCompanyId.value))
+  } catch {
+    deptOptions.value = []
+  } finally {
+    loadingDepts.value = false
+  }
+}
+
+watch(deptCompanyId, () => {
+  if (props.modelValue) void loadDeptOptions()
+})
 
 interface EmployeeForm {
   empNo: string
@@ -109,7 +140,10 @@ function reset() {
 watch(
   () => [props.modelValue, props.employee?.id] as const,
   ([open]) => {
-    if (open) reset()
+    if (open) {
+      reset()
+      void loadDeptOptions()
+    }
   },
   { immediate: true },
 )
@@ -247,12 +281,14 @@ async function submit() {
           <el-form-item label="部门" prop="deptId">
             <el-tree-select
               v-model="form.deptId"
-              :data="deptTree"
+              :data="deptOptions"
               check-strictly
               :render-after-expand="false"
+              :loading="loadingDepts"
               class="full-width"
               placeholder="请选择部门"
             />
+            <div class="field-hint">仅显示该员工所属主体下的部门</div>
           </el-form-item>
         </el-col>
         <el-col :span="12">

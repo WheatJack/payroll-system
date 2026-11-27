@@ -23,6 +23,21 @@ export function employeeSocialSeniority(row: Employee): string {
   return pickDecimal(row.socialSeniorityYears)
 }
 
+/** 工龄口径说明（人员列表与编制台列头共用） */
+export const SENIORITY_TOOLTIP =
+  '按入职日期至核算期间末日计算整年数；离职当月按实际工作日折算'
+
+/**
+ * 部门下拉要按「员工所属主体」过滤（后端开始拒绝员工部门与主体不一致）。
+ * 编辑用员工自己的 companyId；新建用当前登录用户的主体。
+ */
+export function resolveEmployeeCompanyId(
+  employee: Pick<Employee, 'companyId'> | null | undefined,
+  fallback: string,
+): string {
+  return employee?.companyId || fallback
+}
+
 /** 部门展示：优先 deptName，缺失才退回 deptId。 */
 export function employeeDeptLabel(row: Employee): string {
   return row.deptName || row.deptId || '—'

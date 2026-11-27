@@ -9,6 +9,7 @@ import type { Period, PeriodStatus, RunProgress } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { formatOrZero } from '@/utils/money'
 import { normalizeWarnings } from '@/utils/run'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -75,6 +76,20 @@ async function load() {
     loading.value = false
   }
 }
+
+/**
+ * 静默刷新：别人锁定/解锁期间后，这里 15s 内自动同步（窗口重新获得焦点也会立即刷）。
+ * 失败不打扰用户——手动刷新与下一次轮询会再试。
+ */
+async function silentRefresh() {
+  try {
+    rows.value = await periodApi.listPeriods(auth.companyId || undefined)
+  } catch {
+    // 静默失败
+  }
+}
+
+useAutoRefresh(silentRefresh)
 
 function openCreate() {
   periodYm.value = ''

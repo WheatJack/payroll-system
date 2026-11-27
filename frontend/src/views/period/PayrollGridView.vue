@@ -25,6 +25,7 @@ import { buildDeptTree, employeeTypeLabel, type DeptNode } from '@/utils/labels'
 import { add, coerce, format, formatOrZero, sub } from '@/utils/money'
 import { sumMoneyColumn } from '@/utils/report'
 import { buildPayslipParams, buildPeriodSheetParams, payslipExportBlockedReason } from '@/utils/export'
+import { SENIORITY_TOOLTIP } from '@/utils/employee'
 import { parseClipboardMatrix } from '@/utils/paste'
 
 const route = useRoute()
@@ -525,6 +526,11 @@ onBeforeUnmount(() => {
           <template v-if="meta.field === 'employeeType'" #default="scope">
             {{ employeeTypeLabel(scope?.row?.employeeType) }}
           </template>
+          <template v-else-if="meta.field === 'seniorityYears'" #header>
+            <el-tooltip :content="SENIORITY_TOOLTIP" placement="top">
+              <span class="th-tip">{{ meta.title }} ⓘ</span>
+            </el-tooltip>
+          </template>
           <template v-else-if="meta.field === 'seniorityYears'" #default="scope">
             <span class="amount-cell">{{ scope?.row?.seniorityYears ?? '—' }}</span>
           </template>
@@ -642,5 +648,9 @@ onBeforeUnmount(() => {
 .grid-amount.is-dirty {
   color: #e6a23c;
   font-weight: 600;
+}
+.th-tip {
+  cursor: help;
+  border-bottom: 1px dotted #c0c4cc;
 }
 </style>
