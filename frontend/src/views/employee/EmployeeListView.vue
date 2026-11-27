@@ -13,6 +13,8 @@ import { buildDeptTree, employeeStatusLabel, employeeTypeLabel, genderLabel, typ
 import { employeeDeptLabel, employeeSeniority, SENIORITY_TOOLTIP } from '@/utils/employee'
 import EmployeeFormDialog from './EmployeeFormDialog.vue'
 import CompProfilePanel from './CompProfilePanel.vue'
+import InsurancePanel from './InsurancePanel.vue'
+import SpecialDeductionPanel from './SpecialDeductionPanel.vue'
 import EmployeeImportDialog from './EmployeeImportDialog.vue'
 
 const auth = useAuthStore()
@@ -45,6 +47,8 @@ const editing = ref<Employee | null>(null)
 
 const drawerVisible = ref(false)
 const drawerEmployee = ref<Employee | null>(null)
+/** 抽屉内标签：薪酬档案 / 参保信息 / 专项附加扣除 */
+const drawerTab = ref<'comp' | 'insurance' | 'deduction'>('comp')
 
 const importVisible = ref(false)
 
@@ -155,6 +159,7 @@ function onSaved() {
 
 function openCompProfiles(row: Employee) {
   drawerEmployee.value = row
+  drawerTab.value = 'comp'
   drawerVisible.value = true
 }
 
@@ -300,12 +305,18 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-drawer v-model="drawerVisible" :title="`薪酬档案 · ${drawerEmployee?.name ?? ''}`" size="680px" destroy-on-close>
-      <CompProfilePanel
-        v-if="drawerEmployee"
-        :employee-id="drawerEmployee.id"
-        :employee-name="drawerEmployee.name"
-      />
+    <el-drawer v-model="drawerVisible" :title="`薪酬与参保 · ${drawerEmployee?.name ?? ''}`" size="780px" destroy-on-close>
+      <el-tabs v-if="drawerEmployee" v-model="drawerTab">
+        <el-tab-pane label="薪酬档案" name="comp">
+          <CompProfilePanel :employee-id="drawerEmployee.id" :employee-name="drawerEmployee.name" />
+        </el-tab-pane>
+        <el-tab-pane label="参保信息" name="insurance">
+          <InsurancePanel :employee-id="drawerEmployee.id" />
+        </el-tab-pane>
+        <el-tab-pane label="专项附加扣除" name="deduction">
+          <SpecialDeductionPanel :employee-id="drawerEmployee.id" />
+        </el-tab-pane>
+      </el-tabs>
     </el-drawer>
   </div>
 </template>

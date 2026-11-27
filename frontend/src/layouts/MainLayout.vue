@@ -23,6 +23,7 @@ const menus = computed<MenuEntry[]>(() => {
     { path: '/periods', title: '工资期间', perm: 'payroll:record:view' },
     { path: '/reports/monthly', title: '月度报表', perm: 'payroll:record:view' },
     { path: '/reports/annual', title: '年度报表', perm: 'payroll:record:view' },
+    { path: '/reports/tax', title: '个税核对', perm: 'payroll:record:view' },
   ].filter((menu) => auth.has(menu.perm!))
 
   // 系统管理：无任何 sys:* 权限时整组不渲染（仅显隐，真正边界在后端）

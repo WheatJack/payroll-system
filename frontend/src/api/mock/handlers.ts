@@ -41,6 +41,10 @@ import {
   EMPLOYEES,
   EMPLOYEE_ID_NOS,
   EMPLOYEE_MOBILES,
+  ANNUAL_TAX_ROWS,
+  INSURANCE_PARAMS,
+  SOCIAL_INSURANCE,
+  SPECIAL_DEDUCTIONS,
   GRID_EXAMPLE,
   MONTHLY_REPORT_ROWS,
   PAY_ITEMS,
@@ -123,6 +127,10 @@ const state = {
   users: clone(USERS),
   roles: clone(ROLES),
   configs: loadPersistedConfigs(),
+  socialInsurance: clone(SOCIAL_INSURANCE),
+  deductions: clone(SPECIAL_DEDUCTIONS),
+  nextInsuranceId: SOCIAL_INSURANCE.length + 1,
+  nextDeductionId: SPECIAL_DEDUCTIONS.length + 1,
   runs: new Map<string, { startedAt: number }>(),
   nextEmployeeId: EMPLOYEES.length + 1,
   nextProfileId: COMP_PROFILES.length + 1,
@@ -439,6 +447,141 @@ export const handlers = [
     }
     state.profiles.push(next)
     return ok(next)
+  }),
+
+  /* ------------------------------ 个税社保 ------------------------------ */
+
+  http.get(`${API}/employees/:id/social-insurance`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const list = state.socialInsurance
+      .filter((item) => item.employeeId === params.id)
+      .sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? -1 : 1))
+    return ok(list)
+  }),
+
+  http.post(`${API}/employees/:id/social-insurance`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:record:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as {
+      cityCode?: string
+      socialBase?: string
+      housingFundRate?: string
+      effectiveFrom?: string
+    }
+    if (!body.cityCode || !body.effectiveFrom) return fail(400, 'cityCode 与 effectiveFrom 必填')
+    const employeeId = String(params.id)
+    const overlapped = state.socialInsurance.some(
+      (item) =>
+        item.employeeId === employeeId &&
+        rangesOverlap(
+          { from: body.effectiveFrom!, to: null },
+          { from: item.effectiveFrom, to: item.effectiveTo ?? null },
+        ),
+    )
+    if (overlapped) return fail(409, '该员工的参保生效区间与已有记录重叠')
+    const record = {
+      id: String(state.nextInsuranceId++),
+      employeeId,
+      cityCode: body.cityCode,
+      ...(body.socialBase ? { socialBase: body.socialBase } : {}),
+      ...(body.housingFundRate ? { housingFundRate: body.housingFundRate } : {}),
+      effectiveFrom: body.effectiveFrom,
+      effectiveTo: null,
+    }
+    state.socialInsurance.push(record)
+    return ok(record)
+  }),
+
+  http.put(`${API}/social-insurance/:id`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:record:edit')) return fail(403, '无权限执行该操作')
+    const record = state.socialInsurance.find((item) => item.id === params.id)
+    if (!record) return fail(400, '参保信息不存在')
+    const body = (await request.json()) as Record<string, unknown>
+    Object.assign(record, body)
+    return ok(record)
+  }),
+
+  http.get(`${API}/insurance-params`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const cityCode = new URL(request.url).searchParams.get('cityCode')
+    if (!cityCode) return fail(400, 'cityCode 必填')
+    return ok(INSURANCE_PARAMS[cityCode] ?? [])
+  }),
+
+  http.get(`${API}/employees/:id/special-deductions`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    return ok(state.deductions.filter((item) => item.employeeId === params.id))
+  }),
+
+  http.post(`${API}/employees/:id/special-deductions`, async ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:record:edit')) return fail(403, '无权限执行该操作')
+    const body = (await request.json()) as {
+      deductionType?: string
+      monthlyAmount?: string
+      effectiveFrom?: string
+      effectiveTo?: string | null
+      remark?: string | null
+    }
+    if (!body.deductionType || !body.monthlyAmount || !body.effectiveFrom) {
+      return fail(400, 'deductionType、monthlyAmount、effectiveFrom 必填')
+    }
+    const record = {
+      id: String(state.nextDeductionId++),
+      employeeId: String(params.id),
+      deductionType: body.deductionType,
+      monthlyAmount: body.monthlyAmount,
+      effectiveFrom: body.effectiveFrom,
+      effectiveTo: body.effectiveTo ?? null,
+      remark: body.remark ?? null,
+    }
+    state.deductions.push(record as never)
+    return ok(record)
+  }),
+
+  http.delete(`${API}/special-deductions/:id`, ({ request, params }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    if (!hasPermission(request, 'payroll:record:edit')) return fail(403, '无权限执行该操作')
+    const index = state.deductions.findIndex((item) => item.id === params.id)
+    if (index < 0) return fail(400, '专项附加扣除不存在')
+    state.deductions.splice(index, 1)
+    return ok(null)
+  }),
+
+  http.get(`${API}/reports/annual-tax`, ({ request }) => {
+    const denied = requireAuth(request)
+    if (denied) return denied
+    const search = new URL(request.url).searchParams
+    const year = search.get('year')
+    const employeeId = search.get('employeeId')
+    const deptId = search.get('deptId')
+    if (!year) return fail(400, 'year 不能为空')
+
+    let rows = [...ANNUAL_TAX_ROWS]
+    if (employeeId) {
+      const employee = state.employees.find((item) => item.id === employeeId)
+      rows = rows.filter((row) => row.empNo === (employee?.empNo ?? ''))
+    }
+    if (deptId) {
+      const empNos = new Set(
+        state.employees.filter((item) => item.deptId === deptId).map((item) => item.empNo),
+      )
+      rows = rows.filter((row) => empNos.has(row.empNo))
+    }
+    const excludedPeriods = state.periods
+      .filter((period) => period.periodYm.startsWith(`${year}-`))
+      .filter((period) => period.status === 'DRAFT' || period.status === 'EDITING')
+      .map((period) => period.periodYm)
+      .sort()
+    return ok({ rows, excludedPeriods })
   }),
 
   /* ------------------------------ 工资项 ------------------------------ */

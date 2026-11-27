@@ -27,6 +27,7 @@ const routes = [
   { path: '/periods/:id/import', name: 'period-import', component: stub },
   { path: '/reports/monthly', name: 'report-monthly', component: stub },
   { path: '/reports/annual', name: 'report-annual', component: stub },
+  { path: '/reports/tax', name: 'report-tax', component: stub },
   { path: '/system/users', name: 'system-users', component: stub },
   { path: '/system/roles', name: 'system-roles', component: stub },
   { path: '/system/depts', name: 'system-depts', component: stub },

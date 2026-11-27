@@ -103,3 +103,14 @@ export type ConfigValueType = S['ConfigValueType']
 
 // v1.3：人员敏感字段 / 人员批量导入
 export type EmployeeSensitive = S['EmployeeSensitive']
+
+// v1.4：个税社保
+export type DeductionType = S['DeductionType']
+export type SocialInsurance = S['SocialInsurance']
+export type SocialInsuranceCreateRequest = S['SocialInsuranceCreateRequest']
+export type SocialInsuranceUpdateRequest = S['SocialInsuranceUpdateRequest']
+export type InsuranceParam = S['InsuranceParam']
+export type SpecialDeduction = S['SpecialDeduction']
+export type SpecialDeductionCreateRequest = S['SpecialDeductionCreateRequest']
+export type AnnualTaxRow = S['AnnualTaxRow']
+export type AnnualTaxReportResult = S['AnnualTaxReportResult']

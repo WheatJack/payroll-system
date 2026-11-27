@@ -62,6 +62,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '年度报表', perm: 'payroll:record:view' },
       },
       {
+        path: 'reports/tax',
+        name: 'report-tax',
+        component: () => import('@/views/report/AnnualTaxReportView.vue'),
+        meta: { title: '个税核对', perm: 'payroll:record:view' },
+      },
+      {
         path: 'system/users',
         name: 'system-users',
         component: () => import('@/views/system/UserListView.vue'),

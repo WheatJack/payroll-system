@@ -6,6 +6,7 @@
  */
 import gridExampleRaw from './fixtures/grid-response.json?raw'
 import type { SystemConfig } from '@/api/config'
+import type { AnnualTaxRow, InsuranceParam, SocialInsurance, SpecialDeduction } from '@/api/models'
 import type {
   Company,
   CompProfile,
@@ -406,3 +407,104 @@ export const CONFIGS: SystemConfig[] = [
   },
 ]
 
+
+
+/* ------------------------- 个税社保（M2.5） ------------------------- */
+
+export const SOCIAL_INSURANCE: SocialInsurance[] = [
+  {
+    id: '1',
+    employeeId: '1',
+    cityCode: 'BEIJING',
+    // socialBase 省略 = 按近 12 期平均应发自动计算
+    housingFundRate: '0.12',
+    effectiveFrom: '2026-01-01',
+    effectiveTo: null,
+  },
+  {
+    id: '2',
+    employeeId: '2',
+    cityCode: 'SHANGHAI',
+    socialBase: '8000.00',
+    housingFundRate: '0.07',
+    effectiveFrom: '2026-01-01',
+    effectiveTo: null,
+  },
+]
+
+export const INSURANCE_PARAMS: Record<string, InsuranceParam[]> = {
+  BEIJING: [
+    { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '0.00' },
+    { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '3.00' },
+    { insuranceType: 'UNEMPLOYMENT', personalRate: '0.005', baseMin: '6821.00', baseMax: '35283.00', extraAmount: '0.00' },
+    { insuranceType: 'INJURY', personalRate: '0', baseMin: '0.00', baseMax: '0.00', extraAmount: '0.00' },
+    { insuranceType: 'MATERNITY', personalRate: '0', baseMin: '0.00', baseMax: '0.00', extraAmount: '0.00' },
+    { insuranceType: 'HOUSING_FUND', personalRate: '0.12', baseMin: '2420.00', baseMax: '35283.00', extraAmount: '0.00' },
+  ],
+  SHANGHAI: [
+    { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
+    { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
+    { insuranceType: 'UNEMPLOYMENT', personalRate: '0.005', baseMin: '7384.00', baseMax: '36921.00', extraAmount: '0.00' },
+    { insuranceType: 'HOUSING_FUND', personalRate: '0.07', baseMin: '2690.00', baseMax: '36921.00', extraAmount: '0.00' },
+  ],
+  SHENZHEN: [
+    { insuranceType: 'PENSION', personalRate: '0.08', baseMin: '2360.00', baseMax: '27927.00', extraAmount: '0.00' },
+    { insuranceType: 'MEDICAL', personalRate: '0.02', baseMin: '7778.00', baseMax: '38892.00', extraAmount: '0.00' },
+    { insuranceType: 'UNEMPLOYMENT', personalRate: '0.003', baseMin: '2360.00', baseMax: '27927.00', extraAmount: '0.00' },
+    { insuranceType: 'HOUSING_FUND', personalRate: '0.05', baseMin: '2360.00', baseMax: '38892.00', extraAmount: '0.00' },
+  ],
+}
+
+export const SPECIAL_DEDUCTIONS: SpecialDeduction[] = [
+  {
+    id: '1',
+    employeeId: '1',
+    deductionType: 'CHILD_EDU',
+    monthlyAmount: '2000.00',
+    effectiveFrom: '2026-01-01',
+    effectiveTo: null,
+    remark: null,
+  },
+  {
+    id: '2',
+    employeeId: '1',
+    deductionType: 'HOUSING_LOAN',
+    monthlyAmount: '1000.00',
+    effectiveFrom: '2026-01-01',
+    effectiveTo: null,
+    remark: '首套房贷',
+  },
+]
+
+export const ANNUAL_TAX_ROWS: AnnualTaxRow[] = [
+  {
+    empNo: 'E001',
+    empName: '张三',
+    deptName: '北京研发部',
+    paidMonths: 12,
+    cumIncome: '120000.00',
+    cumBasicDeduction: '60000.00',
+    cumSocial: '9600.00',
+    cumFund: '14400.00',
+    cumSpecial: '24000.00',
+    taxable: '12000.00',
+    cumTax: '360.00',
+    lastTax: '30.00',
+    effectiveRate: '0.0030',
+  },
+  {
+    empNo: 'E002',
+    empName: '李四',
+    deptName: '北京财务部',
+    paidMonths: 6,
+    cumIncome: '48000.00',
+    cumBasicDeduction: '30000.00',
+    cumSocial: '4800.00',
+    cumFund: '2400.00',
+    cumSpecial: '0.00',
+    taxable: '10800.00',
+    cumTax: '324.00',
+    lastTax: '54.00',
+    effectiveRate: '0.0068',
+  },
+]

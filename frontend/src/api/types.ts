@@ -164,6 +164,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/employees/{id}/social-insurance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 员工参保信息
+         * @description 需要 `payroll:record:view`，按当前用户数据范围过滤。返回该员工的参保区间列表。
+         */
+        get: operations["listSocialInsurance"];
+        put?: never;
+        /**
+         * 新增参保信息
+         * @description 需要 `payroll:record:edit`。校验同一员工的生效区间不重叠；重叠返回 409。
+         */
+        post: operations["createSocialInsurance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employees/{id}/special-deductions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 员工专项附加扣除
+         * @description 需要 `payroll:record:view`，按当前用户数据范围过滤。
+         */
+        get: operations["listSpecialDeductions"];
+        put?: never;
+        /**
+         * 新增专项附加扣除
+         * @description 需要 `payroll:record:edit`。
+         */
+        post: operations["createSpecialDeduction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/social-insurance/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 修改参保信息
+         * @description 需要 `payroll:record:edit`。只提交需要修改的字段；区间冲突返回 409。
+         */
+        put: operations["updateSocialInsurance"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/special-deductions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 删除专项附加扣除
+         * @description 需要 `payroll:record:edit`。删除指定专项附加扣除记录。
+         */
+        delete: operations["deleteSpecialDeduction"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/insurance-params": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 城市社保/公积金参数
+         * @description 需要 `payroll:record:view`。返回指定城市各险种的个人比例、基数上下限与
+         *     附加金额（`extraAmount`，如大病医疗固定额）。
+         */
+        get: operations["listInsuranceParams"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/employees/{id}/comp-profiles": {
         parameters: {
             query?: never;
@@ -632,6 +741,28 @@ export interface paths {
          *     `groupBy=DEPT` 且操作者数据范围含多个主体时 `companyId` 必填，缺则 400。
          */
         get: operations["getAnnualReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/annual-tax": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 年度个税核对
+         * @description 需要 `payroll:record:view`，按当前用户数据范围过滤。
+         *     仅统计 `LOCKED` 与 `ARCHIVED` 期间；响应 `data` 为 `{rows, excludedPeriods}`，
+         *     `excludedPeriods` 的含义与月度/年度报表一致。
+         */
+        get: operations["getAnnualTaxReport"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1256,6 +1387,102 @@ export interface components {
             total: number;
             current: number;
             size: number;
+        };
+        /**
+         * @description 专项附加扣除类型
+         * @enum {string}
+         */
+        DeductionType: "CHILD_EDU" | "INFANT_CARE" | "CONTINUE_EDU" | "HOUSING_LOAN" | "HOUSING_RENT" | "ELDERLY_CARE";
+        /** @description 员工参保信息（按生效区间版本化）。 */
+        SocialInsurance: {
+            id: components["schemas"]["Id"];
+            employeeId: components["schemas"]["Id"];
+            cityCode: string;
+            socialBase?: components["schemas"]["Money"];
+            housingFundRate?: components["schemas"]["DecimalString"];
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+        };
+        SocialInsuranceCreateRequest: {
+            cityCode: string;
+            socialBase?: components["schemas"]["Money"];
+            housingFundRate?: components["schemas"]["DecimalString"];
+            /** Format: date */
+            effectiveFrom: string;
+        };
+        /** @description 只提交需要修改的字段。 */
+        SocialInsuranceUpdateRequest: {
+            cityCode?: string;
+            socialBase?: components["schemas"]["Money"];
+            housingFundRate?: components["schemas"]["DecimalString"];
+            /** Format: date */
+            effectiveFrom?: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+        };
+        /** @description 某城市某险种的个人缴纳参数。 */
+        InsuranceParam: {
+            /**
+             * @description 险种类型，如 PENSION / MEDICAL / UNEMPLOYMENT / INJURY / MATERNITY / HOUSING_FUND
+             * @example PENSION
+             */
+            insuranceType: string;
+            personalRate: components["schemas"]["DecimalString"];
+            baseMin: components["schemas"]["Money"];
+            baseMax: components["schemas"]["Money"];
+            extraAmount: components["schemas"]["Money"];
+        };
+        /** @description 员工专项附加扣除（按生效区间版本化）。 */
+        SpecialDeduction: {
+            id: components["schemas"]["Id"];
+            employeeId: components["schemas"]["Id"];
+            deductionType: components["schemas"]["DeductionType"];
+            monthlyAmount: components["schemas"]["Money"];
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+            remark?: string | null;
+        };
+        SpecialDeductionCreateRequest: {
+            deductionType: components["schemas"]["DeductionType"];
+            monthlyAmount: components["schemas"]["Money"];
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo?: string | null;
+            remark?: string | null;
+        };
+        /** @description 年度个税核对行。金额为字符串，`paidMonths` 为有工资的月份数。 */
+        AnnualTaxRow: {
+            empNo: string;
+            empName: string;
+            deptName: string;
+            paidMonths: number;
+            cumIncome: components["schemas"]["Money"];
+            cumBasicDeduction: components["schemas"]["Money"];
+            cumSocial: components["schemas"]["Money"];
+            cumFund: components["schemas"]["Money"];
+            cumSpecial: components["schemas"]["Money"];
+            taxable: components["schemas"]["Money"];
+            cumTax: components["schemas"]["Money"];
+            lastTax: components["schemas"]["Money"];
+            /**
+             * @description 实际税率，四位小数
+             * @example 0.1000
+             */
+            effectiveRate: string;
+        };
+        /**
+         * @description 年度个税核对结果。`excludedPeriods` 为该查询范围内「有明细但因未锁定
+         *     （`DRAFT`/`EDITING`）而未纳入统计」的期间列表；非集团账号只列本主体的期间。
+         */
+        AnnualTaxReportResult: {
+            rows: components["schemas"]["AnnualTaxRow"][];
+            /** @description 未纳入统计的期间（`periodYm`） */
+            excludedPeriods: string[];
         };
         CompProfileItem: {
             /** @example POST_ALLOW */
@@ -2053,6 +2280,42 @@ export interface components {
             msg: string;
             data: components["schemas"]["ConfigItem"];
         };
+        ResultSocialInsuranceList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["SocialInsurance"][];
+        };
+        ResultSocialInsurance: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["SocialInsurance"];
+        };
+        ResultSpecialDeductionList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["SpecialDeduction"][];
+        };
+        ResultSpecialDeduction: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["SpecialDeduction"];
+        };
+        ResultInsuranceParamList: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["InsuranceParam"][];
+        };
+        ResultAnnualTaxReport: {
+            code: components["schemas"]["ErrorCode"];
+            /** @example ok */
+            msg: string;
+            data: components["schemas"]["AnnualTaxReportResult"];
+        };
     };
     responses: {
         /** @description 参数校验失败 */
@@ -2456,6 +2719,209 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResultEmployeeSensitive"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listSocialInsurance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 参保信息列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultSocialInsuranceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSocialInsurance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SocialInsuranceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回参保信息 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultSocialInsurance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listSpecialDeductions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 专项附加扣除列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultSpecialDeductionList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createSpecialDeduction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpecialDeductionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 新增成功，返回专项附加扣除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultSpecialDeduction"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateSocialInsurance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SocialInsuranceUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 修改成功，返回参保信息 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultSocialInsurance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteSpecialDeduction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 资源 ID（字符串形式的 Long） */
+                id: components["parameters"]["IdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功，`data` 为 null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listInsuranceParams: {
+        parameters: {
+            query: {
+                /** @description 城市编码 */
+                cityCode: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 该城市的险种参数列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultInsuranceParamList"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3179,6 +3645,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResultAnnualReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAnnualTaxReport: {
+        parameters: {
+            query: {
+                year: string;
+                employeeId?: components["schemas"]["Id"];
+                deptId?: components["schemas"]["Id"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 年度个税核对行 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultAnnualTaxReport"];
                 };
             };
             400: components["responses"]["BadRequest"];
