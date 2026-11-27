@@ -2,9 +2,11 @@ package com.insbean.payroll.admin;
 
 import com.insbean.payroll.admin.dto.DeptCreateReq;
 import com.insbean.payroll.admin.dto.DeptUpdateReq;
+import com.insbean.payroll.admin.mapper.AdminCompanyMapper;
 import com.insbean.payroll.admin.mapper.AdminDeptMapper;
 import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.domain.entity.SysCompanyEntity;
 import com.insbean.payroll.domain.entity.SysDeptEntity;
 import com.insbean.payroll.org.dto.DeptDTO;
 import com.insbean.payroll.security.CurrentUser;
@@ -26,12 +28,14 @@ import java.util.List;
 public class DeptAdminService {
 
     private final AdminDeptMapper deptMapper;
+    private final AdminCompanyMapper companyMapper;
     private final DataScopeEnforcer dataScope;
     private final AuditService auditService;
 
-    public DeptAdminService(AdminDeptMapper deptMapper, DataScopeEnforcer dataScope,
-                            AuditService auditService) {
+    public DeptAdminService(AdminDeptMapper deptMapper, AdminCompanyMapper companyMapper,
+                            DataScopeEnforcer dataScope, AuditService auditService) {
         this.deptMapper = deptMapper;
+        this.companyMapper = companyMapper;
         this.dataScope = dataScope;
         this.auditService = auditService;
     }
@@ -42,6 +46,8 @@ public class DeptAdminService {
             throw new BizException(400, "companyId 必填");
         }
         dataScope.assertCompanyVisible(req.companyId());
+        // 主体必须真实存在且启用：否则 ALL 账号能建出挂在不存在主体下的孤儿部门
+        requireEnabledCompany(req.companyId());
         requireText(req.deptCode(), "部门编码不能为空");
         requireText(req.deptName(), "部门名称不能为空");
         Long parentId = req.parentId() == null ? 0L : req.parentId();
@@ -68,6 +74,7 @@ public class DeptAdminService {
     public DeptDTO update(Long id, DeptUpdateReq req) {
         SysDeptEntity entity = requireDept(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        requireEnabledCompany(entity.getCompanyId());
 
         if (req.parentId() != null && !req.parentId().equals(entity.getParentId())) {
             Long parentId = req.parentId();
@@ -166,6 +173,13 @@ public class DeptAdminService {
 
     private static boolean containsDept(String ancestors, Long deptId) {
         return ancestors != null && ancestors.contains("," + deptId + ",");
+    }
+
+    private void requireEnabledCompany(Long companyId) {
+        SysCompanyEntity company = companyMapper.selectById(companyId);
+        if (company == null || company.getStatus() == null || company.getStatus() != 1) {
+            throw new BizException(400, "法人主体不存在或已停用：" + companyId);
+        }
     }
 
     private SysDeptEntity requireDept(Long id) {

@@ -121,7 +121,7 @@ public class UserAdminService {
             throw new BizException(409, "该人员已关联其它账号");
         }
         validateDept(companyId, req.deptId());
-        List<RoleRow> roles = resolveRoles(req.roleIds(), me, companyId);
+        List<RoleRow> roles = resolveRoles(req.roleIds(), me, companyId, null);
 
         SysUserEntity entity = new SysUserEntity();
         entity.setCompanyId(companyId);
@@ -148,6 +148,8 @@ public class UserAdminService {
         int adminsBefore = userMapper.countActiveAdmins();
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        // 低权管理员不能降级/停用/改角色更高权的账号
+        assertCanManageAccount(entity, me);
 
         if (req.status() != null && req.status() == 0 && id.equals(me.userId())) {
             throw new BizException(409, "不能停用自己的账号");
@@ -173,7 +175,7 @@ public class UserAdminService {
 
         List<RoleRow> roles = req.roleIds() == null
                 ? loadRoles(userMapper.findRoleIds(id))
-                : resolveRoles(req.roleIds(), me, entity.getCompanyId());
+                : resolveRoles(req.roleIds(), me, entity.getCompanyId(), id);
         if (req.roleIds() != null) {
             // 全量替换：先删后插，事务内完成
             userMapper.deleteUserRoles(id);
@@ -194,6 +196,7 @@ public class UserAdminService {
         }
         SysUserEntity entity = requireUser(id);
         dataScope.assertCompanyVisible(entity.getCompanyId());
+        assertCanManageAccount(entity, CurrentUser.get());
         userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         // 逻辑删除；拦截器 findById 会立即查不到该用户 → 其 token 下一次请求即 401
@@ -226,7 +229,8 @@ public class UserAdminService {
 
     // ------------------------------------------------------------------ 内部
 
-    private List<RoleRow> resolveRoles(List<Long> roleIds, CurrentUser me, Long companyId) {
+    private List<RoleRow> resolveRoles(List<Long> roleIds, CurrentUser me, Long companyId,
+                                       Long targetUserId) {
         if (roleIds == null || roleIds.isEmpty()) {
             return List.of();
         }
@@ -241,7 +245,13 @@ public class UserAdminService {
             // 分配的账号范围不能超出操作者自身（避免"给自己配一个 ALL 角色"式提权）
             ScopeGuard.assertScopeNotWider(role.getDataScope(), me);
             // 只比范围不比权限，分公司管理员就能把"权限比自己多"的既有角色挂到自己身上
-            ScopeGuard.assertPermissionsWithinOperator(roleMapper.findPermissions(role.getId()), me);
+            List<String> rolePermissions = roleMapper.findPermissions(role.getId());
+            ScopeGuard.assertPermissionsWithinOperator(rolePermissions, me);
+            // 系统管理员可以给 HR 建号（payroll 权限不要求自己持有），但不能给自己发工资权限
+            if (targetUserId != null && targetUserId.equals(me.userId())
+                    && rolePermissions.stream().anyMatch(p -> p.startsWith("payroll:"))) {
+                throw new BizException(403, "不能给自己授予薪酬权限");
+            }
             roles.add(role);
         }
         return roles;
@@ -328,20 +338,29 @@ public class UserAdminService {
      * 不挡这条路，前面所有防提权不变量都能被"重置密码 → 登录"绕过。
      */
     private void assertCanManageAccount(SysUserEntity target, CurrentUser me) {
+        List<RoleRow> roles = loadRoles(userMapper.findRoleIds(target.getId()));
+        // 没有任何角色的账号处于异常状态：不能按"无权限=可管理"放行，
+        // 否则会在"角色刚被清空"的竞态窗口里被低权管理员接管
+        if (roles.isEmpty()) {
+            throw new BizException(403, "目标账号没有任何角色，禁止通过管理接口操作");
+        }
         if (me.has(ScopeGuard.PERM_GRANT_ALL)) {
             return;
         }
-        List<RoleRow> roles = loadRoles(userMapper.findRoleIds(target.getId()));
         String targetScope = widestScope(roles.stream().map(RoleRow::getDataScope).toList());
         if (ScopeGuard.rank(targetScope) > ScopeGuard.rank(me.dataScope())) {
             throw new BizException(403, "不能管理数据范围高于自己的账号");
         }
-        Set<String> targetPerms = new LinkedHashSet<>();
+        // 只比较 sys:*：薪酬与系统管理是两条线，系统管理员管理 HR 账号时
+        // 不应因为对方有 payroll 权限而被挡住；反之 sys 权限高者（含 grant:all）不可被降级。
+        Set<String> targetSysPerms = new LinkedHashSet<>();
         for (RoleRow role : roles) {
-            targetPerms.addAll(roleMapper.findPermissions(role.getId()));
+            roleMapper.findPermissions(role.getId()).stream()
+                    .filter(p -> p.startsWith("sys:"))
+                    .forEach(targetSysPerms::add);
         }
-        if (!me.permissions().containsAll(targetPerms)) {
-            throw new BizException(403, "不能管理权限点高于自己的账号");
+        if (!me.permissions().containsAll(targetSysPerms)) {
+            throw new BizException(403, "不能管理系统管理权限高于自己的账号");
         }
     }
 

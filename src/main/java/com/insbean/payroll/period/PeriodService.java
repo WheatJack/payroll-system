@@ -108,6 +108,8 @@ public class PeriodService {
     }
 
     private record PeriodAggregate(int employeeCount, BigDecimal totalGross, BigDecimal totalNet) {
+        private static final PeriodAggregate ZERO =
+                new PeriodAggregate(0, new BigDecimal("0.00"), new BigDecimal("0.00"));
     }
 
     private static BigDecimal toDecimal(Object value) {
@@ -117,12 +119,20 @@ public class PeriodService {
 
     private PeriodDTO toScopedDto(PayPeriodEntity period, Map<Long, PeriodAggregate> aggregates) {
         PeriodDTO dto = toDto(period);
-        PeriodAggregate aggregate = aggregates.get(period.getId());
-        if (aggregate == null) {
+        CurrentUser current = CurrentUser.get();
+        boolean broad = current == null
+                || DataScopeEnforcer.ALL.equals(current.dataScope())
+                || DataScopeEnforcer.COMPANY.equals(current.dataScope());
+        if (broad) {
             return dto;
         }
+        // 非集团/公司范围：查不到可见记录就是 0，绝不能回落到全公司合计。
+        // 曾经 aggregate == null 直接返回 dto，导致没有可见记录的 SELF/DEPT_SUB 账号
+        // 看到别人的"3 人 / ¥28,200"。
+        PeriodAggregate aggregate = aggregates.getOrDefault(period.getId(), PeriodAggregate.ZERO);
         return new PeriodDTO(dto.id(), dto.companyId(), dto.periodYm(), dto.status(),
-                aggregate.employeeCount(), aggregate.totalGross(), aggregate.totalNet(),
+                aggregate.employeeCount(), dto.lastRunFailCount(),
+                aggregate.totalGross(), aggregate.totalNet(),
                 dto.hpd(), dto.compiledBy(), dto.lockedBy(), dto.lockedAt(), dto.unlockReason());
     }
 
@@ -321,6 +331,7 @@ public class PeriodService {
                 e.getPeriodYm(),
                 e.getStatus(),
                 e.getEmployeeCount() == null ? 0 : e.getEmployeeCount(),
+                e.getLastRunFailCount() == null ? 0 : e.getLastRunFailCount(),
                 money(e.getTotalGross()),
                 money(e.getTotalNet()),
                 e.getHpd() == null ? DEFAULT_HPD : e.getHpd(),

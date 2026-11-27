@@ -80,7 +80,7 @@ public class ItemService {
         entity.setCategory(req.category());
         entity.setDirection(req.direction() == null ? 1 : req.direction());
         entity.setDataType(req.dataType() == null ? "AMOUNT" : req.dataType());
-        entity.setPrecisionScale(req.precisionScale() == null ? 2 : req.precisionScale());
+        entity.setPrecisionScale(requirePrecisionScale(req.precisionScale()));
         entity.setIncludeInGross(booleanFlag(req.includeInGross(), true));
         entity.setEditable(booleanFlag(req.editable(), true));
         entity.setImportable(booleanFlag(req.importable(), true));
@@ -118,7 +118,7 @@ public class ItemService {
             entity.setDataType(req.dataType());
         }
         if (req.precisionScale() != null) {
-            entity.setPrecisionScale(req.precisionScale());
+            entity.setPrecisionScale(requirePrecisionScale(req.precisionScale()));
         }
         if (req.includeInGross() != null) {
             entity.setIncludeInGross(booleanFlag(req.includeInGross(), true));
@@ -154,6 +154,15 @@ public class ItemService {
         if (itemMapper.countUsedRecords(itemCode) > 0) {
             throw new BizException(409, "该科目已被工资表使用，不能修改" + field + "：" + itemCode);
         }
+    }
+
+    /** 精度只允许 0–4（契约与 UI 一致）；0 表示取整，不能当成"未配置"。 */
+    private static Integer requirePrecisionScale(Integer scale) {
+        int resolved = scale == null ? 2 : scale;
+        if (resolved < 0 || resolved > 4) {
+            throw new BizException(400, "precisionScale 必须在 0–4 之间：" + scale);
+        }
+        return resolved;
     }
 
     private static Integer booleanFlag(Boolean value, boolean defaultValue) {

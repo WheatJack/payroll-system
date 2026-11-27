@@ -51,6 +51,9 @@ public class RecordService {
 
     private static final int MONEY_SCALE = 2;
 
+    /** DECIMAL(18,4) 可表示的最大绝对值。 */
+    private static final BigDecimal MAX_DECIMAL_18_4 = new BigDecimal("99999999999999.9999");
+
     private final PeriodService periodService;
     private final ItemService itemService;
     private final PayRecordMapper recordMapper;
@@ -201,6 +204,10 @@ public class RecordService {
             throw new BizException(400, "明细项编码不能为空");
         }
         PayItemEntity def = itemService.requireItem(period.getCompanyId(), item.itemCode());
+        // 停用科目服务端也必须拒绝：前端把列置灰只是体验，不是防线
+        if (def.getStatus() == null || def.getStatus() != 1) {
+            throw new BizException(400, "该工资项已停用，不能修改：" + item.itemCode());
+        }
         if (def.getEditable() == null || def.getEditable() != 1) {
             throw new BizException(400, "该工资项不允许手工编辑：" + item.itemCode());
         }
@@ -210,6 +217,10 @@ public class RecordService {
                         RoundingMode.HALF_UP);
         if (amount.signum() < 0) {
             throw new BizException(400, "明细金额不能为负数，扣款请使用减项科目：" + item.itemCode());
+        }
+        // DECIMAL(18,4) 上限 99999999999999.9999；超范围必须在服务层拦，否则落库报 500
+        if (amount.abs().compareTo(MAX_DECIMAL_18_4) > 0) {
+            throw new BizException(400, "金额超出允许范围（DECIMAL(18,4)）：" + item.itemCode());
         }
 
         PayRecordItemEntity existing = recordItemMapper.selectOne(

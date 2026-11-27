@@ -86,6 +86,7 @@ public class GenerateService {
     private static final Duration LEASE_TTL = Duration.ofMinutes(10);
 
     private static final String SKIP_NO_PROFILE = "未配置薪酬档案";
+    private static final String SKIP_LEAVE_DATE_MISSING = "离职状态未填离职日期，已跳过";
 
     /** error_msg 是 TEXT(64KB)，进度明细必须设上限，否则 closeRun 自己会因超长而失败。 */
     private static final int MAX_ERROR_ENTRIES = 200;
@@ -168,8 +169,11 @@ public class GenerateService {
         Progress progress = new Progress();
         try {
             generate(period, operatorId, progress);
-            closeRun(run, "SUCCESS", progress);
+            // 部分员工失败不能报 SUCCESS：HR 会据此直接锁定，把漏算的人永久留在外面
+            String runStatus = progress.failed > 0 ? "FAILED" : "SUCCESS";
+            closeRun(run, runStatus, progress);
             periodService.markEditing(periodId, operatorId);
+            markRunFailureCount(periodId, progress.failed);
             // 回写人数/合计 + 生成时的列快照（导出用，不能取当前启用科目）
             totalsRefresher.refresh(period);
             return run.getId();
@@ -186,6 +190,7 @@ public class GenerateService {
             // 将来真改异步后，前端只能靠轮询拿到原因。
             progress.failure = e.getMessage();
             closeRun(run, "FAILED", progress);
+            markRunFailureCount(periodId, progress.failed);
             throw e;
         } finally {
             periodService.release(periodId, owner);
@@ -269,6 +274,11 @@ public class GenerateService {
         Map<Long, Map<String, PayRecordItemEntity>> manualItems = loadManualItems(existing);
 
         for (EmpEmployeeEntity emp : batch) {
+            // 离职却没有离职日期：不臆造日期去改钱，直接跳过并给出可操作的原因
+            if (emp.getStatus() != null && emp.getStatus() == 2 && emp.getLeaveDate() == null) {
+                progress.skipped.put(emp.getEmpNo(), SKIP_LEAVE_DATE_MISSING);
+                continue;
+            }
             CompProfileDTO profile = compProfileService.effectiveAt(emp.getId(), periodEnd);
             if (profile == null) {
                 progress.skipped.put(emp.getEmpNo(), SKIP_NO_PROFILE);
@@ -455,6 +465,17 @@ public class GenerateService {
             return null;
         }
         return workingDays.between(from, to, holidays);
+    }
+
+    /** 把上次生成失败人数写到期间上，前端在期间列表即可看到"有 N 人没算"。 */
+    private void markRunFailureCount(Long periodId, int failed) {
+        try {
+            periodMapper.update(null, Wrappers.<PayPeriodEntity>lambdaUpdate()
+                    .set(PayPeriodEntity::getLastRunFailCount, failed)
+                    .eq(PayPeriodEntity::getId, periodId));
+        } catch (RuntimeException e) {
+            log.warn("写入期间失败人数标记失败: {}", e.getMessage());
+        }
     }
 
     // ------------------------------------------------------------------ 批次与汇总

@@ -37,6 +37,9 @@ class PayrollCalculatorTest {
         // 不计入应发合计的收入项
         DEFS.put("NON_GROSS",
                 new PayItemDef("NON_GROSS", "不计应发补贴", PayCategory.VARIABLE, PayDirection.INCREASE, 2, false));
+        // 0 位精度：取整，不能当成"未配置"回落 2 位
+        DEFS.put("ROUND0",
+                new PayItemDef("ROUND0", "整数科目", PayCategory.VARIABLE, PayDirection.INCREASE, 0, true));
     }
 
     private EmployeePayContext ctx(String baseSalary, LocalDate hireDate, Integer payableDays,
@@ -60,6 +63,17 @@ class PayrollCalculatorTest {
         // 8000 + 600 + 1234.5678，禁止被二次舍入成 9834.57
         assertThat(r.grossAmount()).isEqualByComparingTo("9834.5678");
         assertThat(r.netAmount()).isEqualByComparingTo("9834.5678");
+    }
+
+    @Test
+    @DisplayName("precision=0 的科目真的取整")
+    void zeroScaleItem() {
+        PayrollResult r = calculator.calculate(ctx("8000", LocalDate.of(2020, 3, 1), null,
+                Map.of(), Map.of("ROUND0", new BigDecimal("2.7"))));
+
+        // 2.7 → 3（HALF_UP 取整）；不是 2.70 也不是回落 2 位
+        assertThat(amountOf(r, "ROUND0")).isEqualByComparingTo("3");
+        assertThat(amountOf(r, "ROUND0").scale()).isZero();
     }
 
     @Test

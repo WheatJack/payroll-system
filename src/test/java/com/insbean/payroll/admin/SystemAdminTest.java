@@ -96,13 +96,13 @@ class SystemAdminTest extends AbstractDbTest {
     }
 
     @Test
-    void 授予未持有的权限点被拒绝() {
-        // 操作者没有 payroll:export
+    void 授予未持有的系统权限点被拒绝() {
+        // 操作者没有 sys:role:grant:all（sys 域仍必须是子集）
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
                 Set.of("sys:role:view", "sys:role:edit", "payroll:record:view"));
 
         assertThatThrownBy(() -> roleAdminService.replaceGrants(3L,
-                new RoleGrantReq(List.of("payroll:record:view", "payroll:export"))))
+                new RoleGrantReq(List.of("payroll:record:view", "sys:role:grant:all"))))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("未持有");
 
@@ -251,17 +251,22 @@ class SystemAdminTest extends AbstractDbTest {
     }
 
     @Test
-    void 分配角色也要校验权限点子集() {
-        // 操作者只有系统管理权限，没有 payroll:record:edit
+    void 分配角色要校验系统权限子集() {
+        // 操作者没有 sys:role:grant:all，不能把 SYS_ADMIN（角色 4）分配给别人
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
                 Set.of("sys:user:view", "sys:user:edit", "sys:role:view", "sys:role:edit"));
 
         assertThatThrownBy(() -> userAdminService.create(new UserCreateReq(
-                TestDb.COMPANY_DEFAULT, "newclerk", "Passw0rd!", "新同事", null, null, 1, List.of(1L))))
+                TestDb.COMPANY_DEFAULT, "newclerk", "Passw0rd!", "新同事", null, null, 1, List.of(4L))))
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(403);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM sys_user WHERE username = 'newclerk'", Integer.class)).isZero();
+
+        // 但 payroll 角色属于另一条线：系统管理员可以给 HR 建号
+        assertThat(userAdminService.create(new UserCreateReq(
+                TestDb.COMPANY_DEFAULT, "newclerk", "Passw0rd!", "新同事", null, null, 1, List.of(1L))).id())
+                .isPositive();
     }
 
     @Test
@@ -344,22 +349,43 @@ class SystemAdminTest extends AbstractDbTest {
 
     @Test
     void 权限子集不足时即使数据范围相同也拒绝重置密码() {
-        // 操作者同样是 ALL 范围（rank 不会拦），但权限点少于目标账号
+        // 操作者同样是 ALL 范围（rank 不会拦），但 sys 权限少于目标（SYS_ADMIN 用户 3）
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
                 Set.of("sys:user:view", "sys:user:edit"));
 
-        assertThatThrownBy(() -> userAdminService.resetPassword(2L, new ResetPasswordReq("NewPassw0rd!")))
+        assertThatThrownBy(() -> userAdminService.resetPassword(3L, new ResetPasswordReq("NewPassw0rd!")))
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(403);
     }
 
     @Test
-    void 修改用户分配角色也要校验权限子集() {
+    void 没有角色的账号禁止通过管理接口操作() {
+        jdbc.update("""
+                INSERT INTO sys_user (id, company_id, username, password_hash, real_name, status)
+                VALUES (9, 1, 'norole', 'x', '无角色账号', 1)
+                """);
+        loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL", FULL_ADMIN_PERMS);
+
+        // 即使操作者持有 sys:role:grant:all，也不能操作"角色被清空"这种异常状态
+        assertThatThrownBy(() -> userAdminService.resetPassword(9L, new ResetPasswordReq("NewPassw0rd!")))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        assertThatThrownBy(() -> userAdminService.update(9L,
+                new UserUpdateReq("新名字", null, null, null, null)))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+        assertThatThrownBy(() -> userAdminService.delete(9L))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(403);
+    }
+
+    @Test
+    void 修改用户分配角色也要校验系统权限子集() {
         loginAs(1L, TestDb.COMPANY_DEFAULT, "ALL",
                 Set.of("sys:user:view", "sys:user:edit", "sys:role:view", "sys:role:edit"));
 
         assertThatThrownBy(() -> userAdminService.update(2L,
-                new UserUpdateReq(null, null, null, null, List.of(1L))))
+                new UserUpdateReq(null, null, null, null, List.of(4L))))
                 .isInstanceOf(BizException.class)
                 .extracting("code").isEqualTo(403);
         // 回滚：原角色没有被替换

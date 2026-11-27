@@ -19,6 +19,8 @@ public class PayPeriodEntity {
     private String periodYm;
     private String status;
     private Integer employeeCount;
+    /** 上次生成失败人数（部分成功时 >0，期间状态仍为 EDITING）。 */
+    private Integer lastRunFailCount;
     private BigDecimal totalGross;
     private BigDecimal totalNet;
     private BigDecimal hpd;

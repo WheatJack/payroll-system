@@ -38,6 +38,23 @@ class ItemServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 精度必须在0到4之间() {
+        assertThatThrownBy(() -> service.create(new PayItemCreateReq(
+                null, "P_BAD", "坏精度", "VARIABLE", 1, "AMOUNT", 5,
+                true, true, true, 0, 1), 1L))
+                .isInstanceOf(BizException.class).extracting("code").isEqualTo(400);
+        assertThatThrownBy(() -> service.create(new PayItemCreateReq(
+                null, "P_BAD2", "坏精度", "VARIABLE", 1, "AMOUNT", -1,
+                true, true, true, 0, 1), 1L))
+                .isInstanceOf(BizException.class).extracting("code").isEqualTo(400);
+
+        // 0 是合法精度（取整）
+        assertThat(service.create(new PayItemCreateReq(
+                null, "P_ZERO", "整数科目", "VARIABLE", 1, "AMOUNT", 0,
+                true, true, true, 0, 1), 1L).precisionScale()).isZero();
+    }
+
+    @Test
     void 合并集团通用科目与主体专属科目() {
         // 服务端只给北京分公司配了一个专属科目
         jdbc.update("""

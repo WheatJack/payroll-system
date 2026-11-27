@@ -242,6 +242,8 @@ CREATE TABLE pay_period (
   period_ym      CHAR(7)       NOT NULL COMMENT 'YYYY-MM',
   status         VARCHAR(16)   NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT/EDITING/LOCKED/ARCHIVED',
   employee_count INT           NOT NULL DEFAULT 0,
+  -- 上次生成失败人数：部分成功时 run 状态为 FAILED，前端靠它提示"有人没算"
+  last_run_fail_count INT      NOT NULL DEFAULT 0 COMMENT '上次生成失败人数',
   total_gross    DECIMAL(18,4) NOT NULL DEFAULT 0,
   total_net      DECIMAL(18,4) NOT NULL DEFAULT 0,
   hpd            DECIMAL(6,2)  NOT NULL DEFAULT 21.75 COMMENT '期间计薪天数参数',
@@ -464,7 +466,7 @@ INSERT INTO sys_role (company_id, role_code, role_name, data_scope) VALUES
 
 INSERT INTO sys_role_grant (role_id, perm_code) VALUES
   (1, 'payroll:record:view'), (1, 'payroll:record:edit'), (1, 'payroll:import:submit'), (1, 'payroll:export'),
-  (2, 'payroll:record:view'), (2, 'payroll:period:lock'), (2, 'payroll:export'),
+  (2, 'payroll:record:view'), (2, 'payroll:period:lock'), (2, 'payroll:period:unlock'), (2, 'payroll:export'),
   (3, 'payroll:record:view'),
   (4, 'payroll:record:view');
 

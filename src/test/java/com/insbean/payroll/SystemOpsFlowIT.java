@@ -212,6 +212,126 @@ class SystemOpsFlowIT extends AbstractDbTest {
     }
 
     @Test
+    void 系统管理员可给HR建号但不能给自己加薪酬角色() throws Exception {
+        String admin = login("admin");
+
+        // payroll 角色与 sys 是两条线：系统管理员可以给 HR 账号分配薪酬角色
+        MvcResult assigned = mvc.perform(put("/api/v1/users/2")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleIds\":[\"1\"]}"))
+                .andReturn();
+        assertThat(assigned.getResponse().getStatus()).isEqualTo(200);
+        JsonNode assignedBody = objectMapper.readTree(body(assigned));
+        assertThat(assignedBody.path("data").path("roleIds").get(0).asText()).isEqualTo("1");
+
+        // 但不能把薪酬角色挂到自己（admin 是 user 3，保留 SYS_ADMIN 角色 4）
+        assertThat(mvc.perform(put("/api/v1/users/3")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleIds\":[\"1\",\"4\"]}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+        // 自己仍然只有 SYS_ADMIN
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_user_role WHERE user_id = 3 AND role_id = 1",
+                Integer.class)).isZero();
+    }
+
+    @Test
+    void 低权管理员不能降级或删除更高权账号() throws Exception {
+        // hr01 只有 sys:user:edit 等权限，且数据范围被限为 COMPANY
+        jdbc.update("""
+                INSERT INTO sys_role_grant (role_id, perm_code) VALUES
+                  (1, 'sys:user:view'), (1, 'sys:user:edit')
+                """);
+        jdbc.update("UPDATE sys_role SET data_scope = 'COMPANY' WHERE id = 1");
+        String restricted = login("hr01");
+
+        assertThat(mvc.perform(put("/api/v1/users/3")
+                        .header("Authorization", "Bearer " + restricted)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"realName\":\"被降级\"}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+        assertThat(mvc.perform(delete("/api/v1/users/3")
+                        .header("Authorization", "Bearer " + restricted))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+        // 更高权账号仍在
+        assertThat(jdbc.queryForObject(
+                "SELECT deleted FROM sys_user WHERE id = 3", Integer.class)).isZero();
+    }
+
+    @Test
+    void 复核可解锁而编制人不能() throws Exception {
+        long periodId = lockedPayroll();
+
+        String compiler = login("hr01");
+        assertThat(mvc.perform(post("/api/v1/periods/" + periodId + "/unlock")
+                        .header("Authorization", "Bearer " + compiler)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"编制人无权解锁\"}"))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
+
+        String reviewer = login("hr02");
+        MvcResult unlocked = mvc.perform(post("/api/v1/periods/" + periodId + "/unlock")
+                        .header("Authorization", "Bearer " + reviewer)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"复核确认解锁\"}"))
+                .andReturn();
+        assertThat(unlocked.getResponse().getStatus()).isEqualTo(200);
+        assertThat(objectMapper.readTree(body(unlocked)).path("data").path("status").asText())
+                .isEqualTo("EDITING");
+    }
+
+    @Test
+    void SELF无关联员工时期间合计为零() throws Exception {
+        long periodId = lockedPayroll();
+        // hr02 换成 SELF 范围且不关联任何员工
+        jdbc.update("DELETE FROM sys_user_role WHERE user_id = 2");
+        jdbc.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (2, 3)");
+
+        String self = login("hr02");
+        JsonNode periods = getJson("/api/v1/periods", self);
+        JsonNode target = null;
+        for (JsonNode node : periods.path("data")) {
+            if (node.path("id").asText().equals(String.valueOf(periodId))) {
+                target = node;
+            }
+        }
+        assertThat(target).isNotNull();
+        assertThat(target.path("employeeCount").asInt()).isZero();
+        assertThat(target.path("totalGross").asText()).isEqualTo("0.00");
+        assertThat(target.path("totalNet").asText()).isEqualTo("0.00");
+    }
+
+    @Test
+    void 不存在期间导出返回404() throws Exception {
+        String reviewer = login("hr02");
+        String payload = "{\"reportType\":\"%s\",\"params\":{\"periodYm\":\"2099-01\"},\"format\":\"XLSX\"}";
+        for (String type : new String[]{"PERIOD_SHEET", "PAYSLIP"}) {
+            MvcResult result = mvc.perform(post("/api/v1/reports/export")
+                            .header("Authorization", "Bearer " + reviewer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(String.format(payload, type)))
+                    .andReturn();
+            assertThat(result.getResponse().getStatus()).isEqualTo(404);
+            assertThat(objectMapper.readTree(body(result)).path("code").asInt()).isEqualTo(404);
+        }
+    }
+
+    @Test
+    void 部门挂在不存在主体返回400() throws Exception {
+        String admin = login("admin");
+        MvcResult result = mvc.perform(post("/api/v1/depts")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"companyId\":\"999\",\"deptCode\":\"ORPHAN\",\"deptName\":\"孤儿部门\"}"))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(400);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_dept WHERE dept_code = 'ORPHAN'", Integer.class)).isZero();
+    }
+
+    @Test
     void 报表查询与导出走真实HTTP() throws Exception {
         long periodId = lockedPayroll();
 

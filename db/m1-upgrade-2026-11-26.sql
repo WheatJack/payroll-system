@@ -101,3 +101,15 @@ INSERT IGNORE INTO sys_config (config_key, config_value, value_type, description
    '法定节假日（逗号分隔 ISO 日期）；为空时回退环境变量 PAYROLL_HOLIDAYS', 1),
   ('payroll.system-version', '1', 'TEXT',
    '系统版本号（只读，运维参数）', 0);
+
+-- 13) 复核岗补 payroll:period:unlock
+--    目录里有这个权限点、但没有任何角色持有 → 解锁对所有人 403、锁定不可逆。
+INSERT IGNORE INTO sys_role_grant (role_id, perm_code)
+SELECT r.id, 'payroll:period:unlock'
+  FROM sys_role r
+ WHERE r.company_id = 1 AND r.role_code = 'PAYROLL_REVIEWER' AND r.deleted = 0;
+
+-- 14) pay_period.last_run_fail_count
+--    分批生成时部分员工失败：run 记 FAILED，期间上留失败人数供前端提示。
+ALTER TABLE pay_period
+  ADD COLUMN last_run_fail_count INT NOT NULL DEFAULT 0 COMMENT '上次生成失败人数' AFTER employee_count;

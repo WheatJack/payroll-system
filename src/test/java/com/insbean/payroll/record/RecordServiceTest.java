@@ -239,6 +239,28 @@ class RecordServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 停用科目服务端拒绝写入() {
+        jdbc.update("UPDATE pay_item SET status = 0 WHERE item_code = 'PERF_BONUS'");
+
+        assertThatThrownBy(() -> recordService.applyChangeset(
+                periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "1.00"))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("停用");
+    }
+
+    @Test
+    void 超出DECIMAL18_4的金额返回400而不是500() {
+        assertThatThrownBy(() -> recordService.applyChangeset(
+                periodId, oneChange(recordId, 0, Map.of("PERF_BONUS", "999999999999999.9999"))))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(400);
+        // 事务内没有写入任何东西
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_record_item WHERE record_id = ? AND item_code = 'PERF_BONUS'
+                """, Integer.class, recordId)).isZero();
+    }
+
+    @Test
     void 不计入应发的收入项不改合计但保留明细() {
         jdbc.update("""
                 INSERT INTO pay_item (company_id, item_code, item_name, category, direction,

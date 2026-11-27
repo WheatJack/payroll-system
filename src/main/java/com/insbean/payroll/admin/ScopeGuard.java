@@ -51,15 +51,23 @@ public final class ScopeGuard {
         }
     }
 
-    /** 授予的权限点必须是操作者自身权限点的子集。 */
+    /**
+     * 权限点按域校验：
+     * <ul>
+     *   <li>{@code sys:*} 必须是操作者自身权限点的子集（系统管理不能被代理提权）；</li>
+     *   <li>{@code payroll:*} 不要求操作者持有——HR 与系统管理是两条线，
+     *       否则只持 sys:* 的系统管理员无法给任何人开通薪酬岗，新装环境直接死锁。</li>
+     * </ul>
+     * "不能给自己加薪酬权限"由调用方（用户分配/角色授权）单独拦截。
+     */
     public static void assertPermissionsWithinOperator(Collection<String> requested, CurrentUser current) {
         if (requested == null || requested.isEmpty()) {
             return;
         }
         Set<String> own = current.permissions();
         for (String code : requested) {
-            if (!own.contains(code)) {
-                throw new BizException(403, "不能授予自己未持有的权限点：" + code);
+            if (code != null && code.startsWith("sys:") && !own.contains(code)) {
+                throw new BizException(403, "不能授予自己未持有的系统管理权限点：" + code);
             }
         }
     }

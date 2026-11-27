@@ -71,7 +71,8 @@ public class PayrollCalculator {
         }
         // 按科目自己的精度舍入一次。统一按 2 位会把 4 位科目的金额静默改掉，
         // 导致"生成路径"与"编制台/导入路径"算出不同的钱。
-        int scale = def.precisionScale() > 0 ? def.precisionScale() : PayrollRules.AMOUNT_SCALE;
+        // scale=0 是合法精度（取整），不能当成"未配置"回落 2
+        int scale = def.precisionScale() >= 0 ? def.precisionScale() : PayrollRules.AMOUNT_SCALE;
         BigDecimal amount = (factor == null ? raw : raw.multiply(factor))
                 .setScale(scale, RoundingMode.HALF_UP);
         return new PayItemResult(def.code(), def.name(), def.category(), def.direction(),

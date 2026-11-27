@@ -178,19 +178,27 @@ class ExportServiceTest extends AbstractDbTest {
     }
 
     @Test
-    void 只导出已锁定期间与数据范围内的数据() {
-        // 未锁定的 2026-12 没有记录；SELF 范围只导出本人
+    void 只导出已锁定期间与数据范围内的数据() throws Exception {
+        // SELF 范围只看本人；employeeId=999 没有记录 → 空报表
         login(Set.of("payroll:export", "payroll:record:view"));
         CurrentUser.set(new CurrentUser(1L, TestDb.COMPANY_DEFAULT,
                 Set.of("payroll:export", "payroll:record:view"), "SELF", 999L));
 
         PreparedExport empty = exportService.export(monthly());
-        assertThat(empty.rows()).isZero();
         try {
+            try (InputStream in = Files.newInputStream(empty.path());
+                 XSSFWorkbook workbook = new XSSFWorkbook(in)) {
+                assertThat(workbook.getSheetAt(0).getRow(1).getCell(0).getStringCellValue())
+                        .isEqualTo("该期间没有已锁定数据");
+            }
+        } finally {
             Files.deleteIfExists(empty.path());
-        } catch (Exception ignored) {
-            // 清理失败不影响断言
         }
+        // 审计行数记业务数据行（0），不含说明行
+        assertThat(jdbc.queryForObject("""
+                SELECT new_value FROM pay_audit_log WHERE biz_type = 'EXPORT'
+                 ORDER BY id DESC LIMIT 1
+                """, String.class)).contains("rows=0");
     }
 
     @Test
@@ -234,6 +242,28 @@ class ExportServiceTest extends AbstractDbTest {
                 .extracting("code").isEqualTo(409);
         // 未提交，不应留下导出审计
         assertThat(auditCount()).isZero();
+    }
+
+    @Test
+    void 报表空结果写入说明行且审计记录零行() throws Exception {
+        login(exportPerms());
+        PreparedExport prepared = exportService.export(new ExportRequest(
+                "MONTHLY", new ReportExportParams("2026-12", null, null, null, null, null), "XLSX"));
+        try {
+            try (InputStream in = Files.newInputStream(prepared.path());
+                 XSSFWorkbook workbook = new XSSFWorkbook(in)) {
+                Row first = workbook.getSheetAt(0).getRow(1);
+                // 空报表不能只给一个空表头，否则用户会误判"这个月没有工资"
+                assertThat(first.getCell(0).getStringCellValue()).isEqualTo("该期间没有已锁定数据");
+            }
+        } finally {
+            Files.deleteIfExists(prepared.path());
+        }
+        String audit = jdbc.queryForObject("""
+                SELECT new_value FROM pay_audit_log WHERE biz_type = 'EXPORT'
+                 ORDER BY id DESC LIMIT 1
+                """, String.class);
+        assertThat(audit).contains("rows=0");
     }
 
     // ------------------------------------------------------------------ 工具

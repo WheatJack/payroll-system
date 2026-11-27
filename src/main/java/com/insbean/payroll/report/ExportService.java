@@ -111,6 +111,7 @@ public class ExportService {
         String type = request.reportType().trim().toUpperCase();
         String stamp = STAMP.format(Instant.now());
         List<ExcelWriter.SheetData> sheets;
+        long dataRows;
         String filename;
         String description;
 
@@ -119,6 +120,7 @@ public class ExportService {
                 requirePeriodYm(params);
                 List<MonthlyReportRow> rows = reportService.monthly(
                         ReportQuery.monthly(params.periodYm(), params.companyId(), params.deptId()));
+                dataRows = rows.size();
                 sheets = List.of(monthlySheet(rows));
                 filename = "monthly-" + params.periodYm() + "-" + stamp + ".xlsx";
                 description = describe(type, params);
@@ -130,6 +132,7 @@ public class ExportService {
                 Long sheetCompanyId = params.companyId() != null
                         ? params.companyId()
                         : (DataScopeEnforcer.ALL.equals(me.dataScope()) ? null : me.companyId());
+                dataRows = rows.size();
                 sheets = List.of(annualSheet(params.year(), rows, sheetCompanyId));
                 String group = rows.isEmpty() ? "EMP" : rows.get(0).groupBy();
                 filename = "annual-" + params.year() + "-" + group + "-" + stamp + ".xlsx";
@@ -137,13 +140,17 @@ public class ExportService {
             }
             case "PERIOD_SHEET" -> {
                 requirePeriodYm(params);
-                sheets = periodSheets(params);
+                PeriodData periodData = periodSheets(params);
+                sheets = periodData.sheets();
+                dataRows = periodData.rows();
                 filename = "period-sheet-" + params.periodYm() + "-" + stamp + ".xlsx";
                 description = describe(type, params);
             }
             case "PAYSLIP" -> {
                 requirePeriodYm(params);
-                sheets = payslipSheets(params);
+                PeriodData periodData = payslipSheets(params);
+                sheets = periodData.sheets();
+                dataRows = periodData.rows();
                 filename = "payslip-" + params.periodYm() + "-" + stamp + ".xlsx";
                 description = describe(type, params);
             }
@@ -159,8 +166,9 @@ public class ExportService {
         }
         // 审计在响应头之前写：写不进去就不该把文件发出去（合规要求）
         try {
+            // rows 记业务数据行，不含"没有已锁定数据"的说明行
             auditService.record("EXPORT", null, "EXPORT", type, null,
-                    description + ";rows=" + prepared.rows());
+                    description + ";rows=" + dataRows);
         } catch (RuntimeException e) {
             // 审计失败必须清理临时文件（含全量工资数据）再抛出
             try {
@@ -184,7 +192,9 @@ public class ExportService {
                 ExcelWriter.Column.money("应发合计"),
                 ExcelWriter.Column.money("扣款合计"),
                 ExcelWriter.Column.money("实发合计"));
-        List<List<Object>> data = rows.stream()
+        List<List<Object>> data = rows.isEmpty()
+                ? List.of(listOf("该期间没有已锁定数据"))
+                : rows.stream()
                 .map(r -> listOf(companyName(r.companyId()), r.periodYm(),
                         r.deptName() == null ? String.valueOf(r.deptId()) : r.deptName(),
                         r.employeeCount(), r.grossAmount(), r.deductionAmount(), r.netAmount()))
@@ -208,7 +218,9 @@ public class ExportService {
         columns.add(ExcelWriter.Column.money("扣款合计"));
         columns.add(ExcelWriter.Column.money("实发合计"));
 
-        List<List<Object>> data = rows.stream().map(r -> {
+        List<List<Object>> data = rows.isEmpty()
+                ? List.of(List.of("该年度没有已锁定数据"))
+                : rows.stream().map(r -> {
             List<Object> row = new ArrayList<>();
             row.add(year);
             if (byEmployee) {
@@ -229,11 +241,11 @@ public class ExportService {
 
     // ------------------------------------------------------------------ PERIOD_SHEET
 
-    private List<ExcelWriter.SheetData> periodSheets(ReportExportParams params) {
+    private PeriodData periodSheets(ReportExportParams params) {
         assertPeriodLocked(params.periodYm());
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), null);
         if (records.isEmpty()) {
-            return List.of(emptyPaySheet("工资表-" + params.periodYm()));
+            return new PeriodData(List.of(emptyPaySheet("工资表-" + params.periodYm())), 0);
         }
         Map<Long, List<PayRecordEntity>> byCompany = records.stream()
                 .collect(Collectors.groupingBy(PayRecordEntity::getCompanyId, TreeMap::new, Collectors.toList()));
@@ -246,7 +258,11 @@ public class ExportService {
             sheets.add(paySheet(sheetName("工资表", companyId, params.periodYm()),
                     itemColumns, companyRecords, items));
         });
-        return sheets;
+        return new PeriodData(sheets, records.size());
+    }
+
+    /** sheets + 业务数据行数（审计用；说明行不计入）。 */
+    private record PeriodData(List<ExcelWriter.SheetData> sheets, long rows) {
     }
 
     private ExcelWriter.SheetData emptyPaySheet(String name) {
@@ -257,17 +273,18 @@ public class ExportService {
                 ExcelWriter.Column.money("应发合计"),
                 ExcelWriter.Column.money("扣款合计"),
                 ExcelWriter.Column.money("实发合计"));
-        return new ExcelWriter.SheetData(name, columns, List.of());
+        // 空表也要写一行说明，避免用户把"没有数据"误判成"期间没有工资"
+        return new ExcelWriter.SheetData(name, columns, List.of(List.of("该期间没有已锁定数据")));
     }
 
     // ------------------------------------------------------------------ PAYSLIP
 
-    private List<ExcelWriter.SheetData> payslipSheets(ReportExportParams params) {
+    private PeriodData payslipSheets(ReportExportParams params) {
         assertPeriodLocked(params.periodYm());
         List<Long> employeeIds = params.employeeIds();
         List<PayRecordEntity> records = lockedRecords(params.periodYm(), params.deptId(), employeeIds);
         if (records.isEmpty()) {
-            return List.of(emptyPaySheet("工资条-" + params.periodYm()));
+            return new PeriodData(List.of(emptyPaySheet("工资条-" + params.periodYm())), 0);
         }
         Map<Long, Map<String, BigDecimal>> items = itemAmounts(records);
 
@@ -279,8 +296,8 @@ public class ExportService {
                 columnsFor(companyId, params.periodYm(), flattenItems(companyRecords, items))
                         .forEach(c -> union.putIfAbsent(c.itemCode(), c)));
 
-        return List.of(paySheet("工资条-" + params.periodYm(),
-                new ArrayList<>(union.values()), records, items));
+        return new PeriodData(List.of(paySheet("工资条-" + params.periodYm(),
+                new ArrayList<>(union.values()), records, items)), records.size());
     }
 
     // ------------------------------------------------------------------ 共用
@@ -323,11 +340,17 @@ public class ExportService {
      */
     private void assertPeriodLocked(String periodYm) {
         CurrentUser current = requireUser();
-        List<PayPeriodEntity> periods = periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
-                .eq(PayPeriodEntity::getPeriodYm, periodYm));
-        boolean anyUnlocked = periods.stream()
+        List<PayPeriodEntity> visible = periodMapper.selectList(Wrappers.<PayPeriodEntity>lambdaQuery()
+                        .eq(PayPeriodEntity::getPeriodYm, periodYm))
+                .stream()
                 .filter(p -> DataScopeEnforcer.ALL.equals(current.dataScope())
                         || current.companyId().equals(p.getCompanyId()))
+                .toList();
+        // 期间不存在必须 404：否则"2099-01"会返回空工作簿 200，用户以为该月没有工资
+        if (visible.isEmpty()) {
+            throw new BizException(404, "期间不存在：" + periodYm);
+        }
+        boolean anyUnlocked = visible.stream()
                 .anyMatch(p -> !"LOCKED".equals(p.getStatus()) && !"ARCHIVED".equals(p.getStatus()));
         if (anyUnlocked) {
             throw new BizException(409, "期间尚未锁定，不能导出完整工资表或工资条");

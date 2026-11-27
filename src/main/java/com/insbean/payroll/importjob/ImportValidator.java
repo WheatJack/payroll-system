@@ -44,6 +44,7 @@ public class ImportValidator {
     private static final String TITLE_EMP_NO = "工号";
     private static final String TITLE_EMP_NAME = "姓名";
     private static final int MAX_RAW_VALUE = 512;
+    private static final BigDecimal MAX_DECIMAL_18_4 = new BigDecimal("99999999999999.9999");
 
     private final PayRecordMapper recordMapper;
     private final ItemService itemService;
@@ -152,6 +153,9 @@ public class ImportValidator {
         Map<Integer, String> keys = machineHeader ? headRows.get(1) : Map.of();
         Map<Integer, String> mapping = new LinkedHashMap<>();
 
+        // 先解析出每列的候选键，再按"缺工号 → 未知列"的顺序报错，
+        // 否则缺工号的文件会先被某个不认识的科目列带偏，提示指错列。
+        List<String> unknown = new ArrayList<>();
         for (Map.Entry<Integer, String> entry : titles.entrySet()) {
             int index = entry.getKey();
             String title = trim(entry.getValue());
@@ -165,13 +169,17 @@ public class ImportValidator {
             }
             PayItemDefDTO item = itemDefs.get(key);
             if (item == null) {
-                throw new BizException(400, "模板列与工资项字典不匹配（或该科目不允许在此导入类型中导入）："
-                        + (key.isEmpty() ? title : key));
+                unknown.add(key.isEmpty() ? title : key);
+                continue;
             }
             mapping.put(index, item.itemCode());
         }
         if (!mapping.containsValue(KEY_EMP_NO)) {
             throw new BizException(400, "模板缺少工号列");
+        }
+        if (!unknown.isEmpty()) {
+            throw new BizException(400, "模板列与工资项字典不匹配（或该科目不允许在此导入类型中导入）："
+                    + unknown.get(0));
         }
         return mapping;
     }
@@ -271,6 +279,12 @@ public class ImportValidator {
                     if (amount.signum() < 0) {
                         addError(excelRow, def.itemName(), raw, "AMOUNT_NEGATIVE",
                                 "金额不能为负数，扣款请使用减项科目");
+                        rowFailed = true;
+                        continue;
+                    }
+                    if (amount.abs().compareTo(MAX_DECIMAL_18_4) > 0) {
+                        addError(excelRow, def.itemName(), raw, "AMOUNT_OUT_OF_RANGE",
+                                "金额超出允许范围");
                         rowFailed = true;
                         continue;
                     }

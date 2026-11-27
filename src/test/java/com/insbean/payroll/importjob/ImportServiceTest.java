@@ -373,6 +373,16 @@ class ImportServiceTest extends AbstractDbTest {
     }
 
     @Test
+    void 缺工号列时提示缺工号而不是别的列() throws Exception {
+        byte[] bad = buildFileRaw(List.of("姓名", "基本工资"),
+                List.of("empName", "BASE_SALARY"), new Object[][]{{"员工1", 1}});
+        assertThatThrownBy(() -> importService.validate(
+                new MockMultipartFile("file", "no-empno.xlsx", XLSX, bad), periodId, "FIXED", null))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("工号");
+    }
+
+    @Test
     void 未知工号列为列不匹配时报400() throws Exception {
         byte[] bytes = buildFileRaw(List.of("工号", "姓名", "不存在的科目"),
                 List.of("empNo", "empName", "NOPE"), new Object[][]{{"E001", "员工1", 1}});

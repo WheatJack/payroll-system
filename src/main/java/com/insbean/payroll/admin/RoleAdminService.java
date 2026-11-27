@@ -184,16 +184,26 @@ public class RoleAdminService {
         ScopeGuard.assertPermissionsWithinOperator(permissions, me);
 
         List<String> before = roleMapper.findPermissions(id);
+        String removed = before.stream().filter(p -> !permissions.contains(p)).sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+        String added = permissions.stream().filter(p -> !before.contains(p)).sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+
+        // 与用户分配同一条线：不能给自己所在的角色新增 payroll:*（否则系统管理员可自提权拿工资数据）
+        boolean selfHoldsRole = userMapper.findRoleIds(me.userId()).contains(id);
+        boolean addsPayroll = permissions.stream()
+                .filter(p -> !before.contains(p))
+                .anyMatch(p -> p.startsWith("payroll:"));
+        if (selfHoldsRole && addsPayroll) {
+            throw new BizException(403, "不能给自己授予薪酬权限");
+        }
+
         userMapper.lockActiveUsers();
         int adminsBefore = userMapper.countActiveAdmins();
         replaceGrants(id, permissions);
         assertAdminSurvives(adminsBefore);
 
         // 审计必须记差集：全量集合回答不了"谁在何时把 export 给了谁"
-        String removed = before.stream().filter(p -> !permissions.contains(p)).sorted()
-                .collect(java.util.stream.Collectors.joining(","));
-        String added = permissions.stream().filter(p -> !before.contains(p)).sorted()
-                .collect(java.util.stream.Collectors.joining(","));
         // 差集为空说明什么都没变，不写空审计（否则审计表全是 old="" new="" 的噪音）
         if (!removed.isEmpty() || !added.isEmpty()) {
             auditService.record("ROLE", id, "GRANT_REPLACE", "permissions", removed, added);

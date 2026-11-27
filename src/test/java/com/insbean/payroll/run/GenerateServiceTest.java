@@ -429,6 +429,59 @@ class GenerateServiceTest extends AbstractDbTest {
         assertThat(itemAmount("E101", "BASE_SALARY")).isEqualByComparingTo("7356.32");
     }
 
+    @Test
+    void 部分生成失败时批次为FAILED且期间有失败标记() {
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction,
+                                      data_type, precision_scale, include_in_gross, editable,
+                                      importable, sort_no, status)
+                VALUES (0, 'P3', '临时补贴', 'VARIABLE', 1, 'AMOUNT', 2, 1, 1, 1, 65, 1)
+                """);
+        generateService.startGenerate(periodId, OPERATOR);
+        Long recordId = jdbc.queryForObject(
+                "SELECT id FROM pay_record WHERE period_id = ? AND emp_no = 'E001'",
+                Long.class, periodId);
+        int version = jdbc.queryForObject(
+                "SELECT version_no FROM pay_record WHERE id = ?", Integer.class, recordId);
+        recordService.applyChangeset(periodId, new ChangesetReq(List.of(
+                new ChangesetChange(recordId, version, List.of(new ChangesetItem("P3", "9.99"))))));
+
+        // 停用已在用的科目 → 重算时该员工取不到科目定义
+        jdbc.update("UPDATE pay_item SET status = 0 WHERE item_code = 'P3'");
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+
+        RunProgressDTO progress = generateService.progress(runId);
+        assertThat(progress.status()).isEqualTo("FAILED");
+        assertThat(progress.failed()).isEqualTo(1);
+        assertThat(progress.success()).isEqualTo(1);
+        assertThat(progress.errors()).anySatisfy(e -> {
+            assertThat(e.empNo()).isEqualTo("E001");
+            assertThat(e.message()).contains("P3");
+        });
+        assertThat(jdbc.queryForObject(
+                "SELECT last_run_fail_count FROM pay_period WHERE id = ?", Integer.class, periodId))
+                .isEqualTo(1);
+        // 期间仍是编制中，不能被当成可锁定
+        assertThat(periodService.get(periodId).status()).isEqualTo("EDITING");
+    }
+
+    @Test
+    void 离职未填离职日期跳过并给出原因() {
+        Long e200 = createEmployee("E200", "110101199001016666", TestDb.COMPANY_DEFAULT,
+                TestDb.DEPT_DEFAULT, LocalDate.of(2020, 3, 1), null, 2);
+        compProfileService.save(new CompProfileSaveReq(null, e200, LocalDate.of(2020, 3, 1),
+                new BigDecimal("8000"), "入职定薪", List.of()));
+
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+
+        RunProgressDTO progress = generateService.progress(runId);
+        assertThat(progress.skipped()).containsKey("E200");
+        assertThat(progress.skipped().get("E200")).contains("离职日期");
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_record WHERE period_id = ? AND emp_no = 'E200'",
+                Integer.class, periodId)).isZero();
+    }
+
     private String itemSource(Long recordId, String itemCode) {
         return jdbc.queryForObject("""
                 SELECT source FROM pay_record_item WHERE record_id = ? AND item_code = ?

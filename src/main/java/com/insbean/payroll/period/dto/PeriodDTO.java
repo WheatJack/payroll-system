@@ -10,6 +10,7 @@ public record PeriodDTO(
         String periodYm,
         String status,
         Integer employeeCount,
+        Integer lastRunFailCount,
         BigDecimal totalGross,
         BigDecimal totalNet,
         BigDecimal hpd,
