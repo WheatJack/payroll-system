@@ -342,7 +342,7 @@ paths:
     get:
       tags: [人员]
       summary: 人员详情
-      description: 证件号/手机号按权限返回掩码，完整值需 `payroll:sensitive:view` 且二次确认。
+      description: 证件号/手机号只返回掩码，不提供明文出口。
       operationId: getEmployee
       x-milestone: M1
       parameters:
@@ -1512,7 +1512,7 @@ paths:
         需要 `sys:role:edit`。**全量替换**该角色的权限点集合（先删后插，事务内完成）；
         传空数组即清空。权限点取值见 `PermissionCode`。
         **防自我提权**：提交的权限点必须是操作者自身权限点的子集；包含
-        `payroll:export`、`payroll:sensitive:view`、`sys:role:grant:all` 等
+        `payroll:export`、`sys:role:grant:all` 等
         操作者未持有的权限点即越权，返回 403。
       operationId: replaceRoleGrants
       x-milestone: M1.5
@@ -1836,7 +1836,6 @@ components:
         - 核算：`payroll:record:view`、`payroll:record:edit`
         - 期间：`payroll:period:lock`、`payroll:period:unlock`
         - 导入导出：`payroll:import:submit`、`payroll:export`
-        - 敏感字段：`payroll:sensitive:view`
         - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
           `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
           `sys:config:view`、`sys:config:edit`
@@ -1847,7 +1846,6 @@ components:
         - 'payroll:period:unlock'
         - 'payroll:import:submit'
         - 'payroll:export'
-        - 'payroll:sensitive:view'
         - 'sys:user:view'
         - 'sys:user:edit'
         - 'sys:role:view'
@@ -2074,7 +2072,7 @@ components:
       description: 人员详情。证件号/手机号只返回掩码，不返回明文。
       required:
         [id, companyId, empNo, name, gender, idType, idNoMask, employeeType,
-         deptId, deptName, hireDate, status]
+         deptId, deptName, hireDate, seniorityYears, status]
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -2134,6 +2132,21 @@ components:
           type: string
           format: date
           nullable: true
+        seniorityYears:
+          type: string
+          pattern: '^[0-9]{1,3}\.[0-9]{2}$'
+          description: |
+            本单位工龄。派生值，由入职日期（`hireDate`）计算，不接受写入；
+            整年向下取整后保留 2 位小数。
+          example: '6.00'
+        socialSeniorityYears:
+          type: string
+          nullable: true
+          pattern: '^[0-9]{1,3}\.[0-9]{2}$'
+          description: |
+            社会工龄。派生值，由社会工龄起算日（`workStartDate`）计算，不接受写入；
+            整年向下取整后保留 2 位小数；`workStartDate` 为空时返回 null。
+          example: '8.00'
         status:
           type: integer
           description: 1在职 2离职 3停薪留职
