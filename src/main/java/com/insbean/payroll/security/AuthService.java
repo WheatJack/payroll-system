@@ -2,6 +2,7 @@ package com.insbean.payroll.security;
 
 import com.insbean.payroll.audit.AuditService;
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.TooManyAttemptsException;
 import com.insbean.payroll.security.dto.CurrentUserResponse;
 import com.insbean.payroll.security.dto.LoginResponse;
 import com.insbean.payroll.security.mapper.AuthMapper;
@@ -30,9 +31,13 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class AuthService {
 
-    /** 登录失败限流：同一用户名 + IP 在 5 分钟内失败 5 次即暂时拒绝。 */
-    private static final int MAX_LOGIN_FAILURES = 5;
-    private static final Duration LOGIN_FAILURE_WINDOW = Duration.ofMinutes(5);
+    /** 登录失败渐进延迟：不硬锁，避免恶作剧把知道用户名的人锁在门外。 */
+    private static final int DELAY_THRESHOLD = 5;
+    private static final long BASE_DELAY_MILLIS = 2_000;
+    private static final int HARD_DELAY_THRESHOLD = 10;
+    private static final long HARD_DELAY_MILLIS = 10_000;
+    /** 15 分钟无失败自动清零。 */
+    private static final Duration LOGIN_FAILURE_WINDOW = Duration.ofMinutes(15);
 
     /** 用户名不存在时也对它跑一次 bcrypt，避免用响应时间枚举账号。 */
     private static final String DUMMY_HASH =
@@ -57,8 +62,15 @@ public class AuthService {
 
     public LoginResponse login(String username, String rawPassword) {
         String attemptKey = username + "|" + clientIp();
-        if (isBlocked(attemptKey)) {
-            throw new BizException(429, "登录尝试过于频繁，请稍后再试");
+        int priorFailures = failureCount(attemptKey);
+        long delayMillis = delayFor(priorFailures);
+        if (delayMillis > 0) {
+            // 渐进延迟：暴力破解每次要等 2–10 秒，正常用户输对密码只是慢一次
+            try {
+                Thread.sleep(delayMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         AuthUserRow user = authMapper.findByUsername(username);
@@ -69,6 +81,10 @@ public class AuthService {
         // 用户名不存在与密码错误返回同一条提示，避免账号枚举
         if (user == null || user.getStatus() == null || user.getStatus() != 1 || !passwordMatches) {
             registerFailure(attemptKey, username);
+            if (priorFailures >= DELAY_THRESHOLD) {
+                // 已经按延迟等待过仍然失败：429 并告知下次等待秒数，而不是永久锁定
+                throw new TooManyAttemptsException(delayMillis / 1000);
+            }
             throw new BizException(401, "用户名或密码错误");
         }
         loginFailures.remove(attemptKey);
@@ -76,14 +92,21 @@ public class AuthService {
         return new LoginResponse(tokenService.issue(user.getId()), toResponse(user));
     }
 
-    private boolean isBlocked(String key) {
+    private static long delayFor(int failures) {
+        if (failures >= HARD_DELAY_THRESHOLD) {
+            return HARD_DELAY_MILLIS;
+        }
+        return failures >= DELAY_THRESHOLD ? BASE_DELAY_MILLIS : 0;
+    }
+
+    private int failureCount(String key) {
         Deque<Long> failures = loginFailures.get(key);
         if (failures == null) {
-            return false;
+            return 0;
         }
         synchronized (failures) {
             prune(failures);
-            return failures.size() >= MAX_LOGIN_FAILURES;
+            return failures.size();
         }
     }
 
@@ -92,8 +115,8 @@ public class AuthService {
         synchronized (failures) {
             prune(failures);
             failures.addLast(System.currentTimeMillis());
-            if (failures.size() == MAX_LOGIN_FAILURES) {
-                // 触发限流是安全事件，留一条审计（操作人取当前上下文，登录失败时为 system）
+            if (failures.size() == DELAY_THRESHOLD) {
+                // 进入延迟档是安全事件，留一条审计（操作人取当前上下文，登录失败时为 system）
                 auditService.record("USER", null, "UPDATE", "login_blocked", null,
                         username + "@" + clientIp());
             }

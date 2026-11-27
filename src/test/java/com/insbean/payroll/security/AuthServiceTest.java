@@ -1,6 +1,7 @@
 package com.insbean.payroll.security;
 
 import com.insbean.payroll.common.BizException;
+import com.insbean.payroll.common.TooManyAttemptsException;
 import com.insbean.payroll.security.dto.LoginResponse;
 import com.insbean.payroll.support.AbstractDbTest;
 import com.insbean.payroll.support.TestDb;
@@ -29,16 +30,35 @@ class AuthServiceTest extends AbstractDbTest {
                     .isInstanceOf(BizException.class)
                     .extracting("code").isEqualTo(401);
         }
-        // 达到阈值后，即使密码正确也被限流挡住
+        // 第 6 次起先强制等待 2 秒，再处理；仍失败才 429（带 retryAfter）
         assertThatThrownBy(() -> authService.login("ghost", "WrongPassw0rd!"))
-                .isInstanceOf(BizException.class)
-                .extracting("code").isEqualTo(429);
+                .isInstanceOf(TooManyAttemptsException.class)
+                .satisfies(e -> assertThat(((TooManyAttemptsException) e).getRetryAfterSeconds())
+                        .isEqualTo(2));
 
         Integer audits = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM pay_audit_log
                  WHERE field_name = 'login_blocked' AND biz_type = 'USER'
                 """, Integer.class);
         assertThat(audits).isPositive();
+    }
+
+    @Test
+    void 五次失败后仍可用正确密码登录且计数清零() {
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login("hr02", "WrongPassw0rd!"))
+                    .isInstanceOf(BizException.class)
+                    .extracting("code").isEqualTo(401);
+        }
+
+        // 不硬锁：第 6 次正确密码只需等待 2 秒就能登录成功
+        LoginResponse response = authService.login("hr02", TestDb.PASSWORD);
+        assertThat(response.token()).isNotBlank();
+
+        // 成功后计数清零：下一次错误密码只按普通失败返回 401
+        assertThatThrownBy(() -> authService.login("hr02", "WrongPassw0rd!"))
+                .isInstanceOf(BizException.class)
+                .extracting("code").isEqualTo(401);
     }
 
     @Test

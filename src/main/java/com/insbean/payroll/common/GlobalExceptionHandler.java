@@ -78,6 +78,14 @@ public class GlobalExceptionHandler {
                 .body(Result.fail(404, "接口不存在"));
     }
 
+    /** 登录限流：429 + data.retryAfter（秒）。 */
+    @ExceptionHandler(TooManyAttemptsException.class)
+    public ResponseEntity<Result<Map<String, Object>>> handleTooManyAttempts(TooManyAttemptsException e) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(new Result<>(429, e.getMessage(),
+                        Map.of("retryAfter", e.getRetryAfterSeconds())));
+    }
+
     /** 方法不被支持必须是 405，不是 500（客户端打错方法不是服务端故障）。 */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<Result<Void>> handleMethodNotAllowed(HttpRequestMethodNotSupportedException e) {
