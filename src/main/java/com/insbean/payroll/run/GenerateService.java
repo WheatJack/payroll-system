@@ -51,6 +51,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -338,9 +339,11 @@ public class GenerateService {
                 progress.failed++;
                 continue;
             }
-            // 编制台手工改过的项必须原样保留（含 FIXED/COMPUTED 与 4 位精度），
-            // 重新生成只重算系统能算的项，不能把人的修改静默抹掉。
-            result = applyManualOverrides(result, manual, itemDefs);
+            // 必须先按 itemCode 去重再落库：
+            // 同一科目可能同时来自薪酬档案（fixedItems）与既有变动项（variableItems），
+            // 计算器会产出两条同 code 明细，直接 INSERT 会撞 uk_record_item 让整批失败。
+            // 同时把手工改过的项（含 FIXED/COMPUTED 与 4 位精度）覆盖回去。
+            result = finalizeResult(result, manual, itemDefs);
 
             int seniorityYears = calculator.seniorityYears(emp.getHireDate(), periodEnd);
             // 部门快照与 company_id 同口径：取期间末日的任职部门，而不是人员表的当前部门
@@ -374,8 +377,13 @@ public class GenerateService {
     }
 
     private void insertItems(Long recordId, PayrollResult result, Map<String, Integer> sortNoByCode) {
+        // 兜底：即使上游漏了去重，也不能让同一 (record_id, item_code) 插两次撞唯一键，
+        // 那会让该员工整条生成失败（线上 record_id=32/P0 的根因）
+        Set<String> inserted = new LinkedHashSet<>();
         for (PayRecordItemEntity item : recordAssembler.toItems(recordId, result, sortNoByCode)) {
-            recordItemMapper.insert(item);
+            if (inserted.add(item.getItemCode())) {
+                recordItemMapper.insert(item);
+            }
         }
     }
 
@@ -405,34 +413,38 @@ public class GenerateService {
     }
 
     /**
-     * 把手动项合并回计算结果，并重算合计。
+     * 计算结果定稿：按 itemCode 去重 + 合并手工项 + 重算合计。
      *
-     * <p>只覆盖代码相同的项；手动新增的项追加进去。合计按与计算器相同的口径重算：
-     * 应发只加 include_in_gross 的增项，扣款加全部减项，不再二次舍入。
+     * <p>去重是必须的：同一科目可能既在薪酬档案里、又是既有变动明细，
+     * 计算器会为它产出两条同 code 的明细；明细表有 uk_record_item，
+     * 分两次插或重复插都会让整批生成失败（线上 record_id=32/item_code=P0 即此）。
+     * 后出现的值覆盖先出现的值，手工项最后覆盖（人的修改优先级最高）。
+     *
+     * <p>合计按与计算器相同的口径重算：应发只加 include_in_gross 的增项，
+     * 扣款加全部减项，不再二次舍入。
      */
-    private PayrollResult applyManualOverrides(PayrollResult result,
-                                               Map<String, PayRecordItemEntity> manual,
-                                               Map<String, PayItemDef> itemDefs) {
-        if (manual == null || manual.isEmpty()) {
-            return result;
-        }
+    private PayrollResult finalizeResult(PayrollResult result,
+                                         Map<String, PayRecordItemEntity> manual,
+                                         Map<String, PayItemDef> itemDefs) {
         Map<String, PayItemResult> byCode = new LinkedHashMap<>();
         for (PayItemResult item : result.items()) {
             byCode.put(item.code(), item);
         }
-        for (PayRecordItemEntity entity : manual.values()) {
-            PayItemDef def = itemDefs.get(entity.getItemCode());
-            PayCategory category = entity.getCategory() == null
-                    ? (def == null ? PayCategory.VARIABLE : def.category())
-                    : PayCategory.valueOf(entity.getCategory());
-            boolean decrease = entity.getDirection() != null
-                    ? entity.getDirection() == 2
-                    : def != null && def.direction() == PayDirection.DECREASE;
-            boolean includeInGross = def == null || def.includeInGross();
-            byCode.put(entity.getItemCode(), new PayItemResult(
-                    entity.getItemCode(), entity.getItemName(), category,
-                    decrease ? PayDirection.DECREASE : PayDirection.INCREASE,
-                    entity.getAmount(), PaySource.MANUAL, includeInGross));
+        if (manual != null) {
+            for (PayRecordItemEntity entity : manual.values()) {
+                PayItemDef def = itemDefs.get(entity.getItemCode());
+                PayCategory category = entity.getCategory() == null
+                        ? (def == null ? PayCategory.VARIABLE : def.category())
+                        : PayCategory.valueOf(entity.getCategory());
+                boolean decrease = entity.getDirection() != null
+                        ? entity.getDirection() == 2
+                        : def != null && def.direction() == PayDirection.DECREASE;
+                boolean includeInGross = def == null || def.includeInGross();
+                byCode.put(entity.getItemCode(), new PayItemResult(
+                        entity.getItemCode(), entity.getItemName(), category,
+                        decrease ? PayDirection.DECREASE : PayDirection.INCREASE,
+                        entity.getAmount(), PaySource.MANUAL, includeInGross));
+            }
         }
         List<PayItemResult> items = new ArrayList<>(byCode.values());
         BigDecimal gross = items.stream()

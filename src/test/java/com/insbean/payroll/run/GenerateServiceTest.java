@@ -3,6 +3,7 @@ package com.insbean.payroll.run;
 import com.insbean.payroll.common.BizException;
 import com.insbean.payroll.employee.CompProfileService;
 import com.insbean.payroll.employee.EmployeeService;
+import com.insbean.payroll.employee.dto.CompProfileItemDTO;
 import com.insbean.payroll.employee.dto.CompProfileSaveReq;
 import com.insbean.payroll.employee.dto.EmployeeSaveReq;
 import com.insbean.payroll.period.PeriodService;
@@ -380,6 +381,9 @@ class GenerateServiceTest extends AbstractDbTest {
         assertThat(itemAmount("E001", "FIXED_BONUS")).isEqualByComparingTo("500.00");
         assertThat(itemSource(recordId, "PRECISE")).isEqualTo("MANUAL");
         assertThat(itemSource(recordId, "FIXED_BONUS")).isEqualTo("MANUAL");
+        // 值对还不够：明细行数不能翻倍、同一 code 只能一行
+        assertThat(itemCount(recordId, "PRECISE")).isEqualTo(1);
+        assertThat(itemCount(recordId, "FIXED_BONUS")).isEqualTo(1);
 
         BigDecimal gross = jdbc.queryForObject(
                 "SELECT gross_amount FROM pay_record WHERE id = ?", BigDecimal.class, recordId);
@@ -512,6 +516,78 @@ class GenerateServiceTest extends AbstractDbTest {
         });
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pay_run_skip WHERE run_id = ?", Integer.class, runId)).isPositive();
+    }
+
+    @Test
+    void 连续生成两次明细不翻倍() {
+        generateService.startGenerate(periodId, OPERATOR);
+        int itemsBefore = itemCountOfPeriod();
+        int rowsBefore = recordMapper.countActive(periodId, TestDb.COMPANY_DEFAULT);
+
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+
+        assertThat(generateService.progress(runId).status()).isEqualTo("SUCCESS");
+        assertThat(recordMapper.countActive(periodId, TestDb.COMPANY_DEFAULT)).isEqualTo(rowsBefore);
+        assertThat(itemCountOfPeriod()).isEqualTo(itemsBefore);
+        // 同一 (record_id, item_code) 不允许出现两行
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM (
+                  SELECT record_id, item_code FROM pay_record_item
+                   GROUP BY record_id, item_code HAVING COUNT(*) > 1
+                ) dup
+                """, Integer.class)).isZero();
+    }
+
+    @Test
+    void 科目同时出现在档案与变动项时明细不重复() {
+        // 线上场景：科目 P0 既是薪酬档案固定项、又有历史变动明细 → 计算器产出两条同 code
+        jdbc.update("""
+                INSERT INTO pay_item (company_id, item_code, item_name, category, direction,
+                                      data_type, precision_scale, include_in_gross, editable,
+                                      importable, sort_no, status)
+                VALUES (0, 'P0', '临时项', 'VARIABLE', 1, 'AMOUNT', 2, 1, 1, 1, 66, 1)
+                """);
+        compProfileService.save(new CompProfileSaveReq(null, employeeIdByEmpNo("E001"),
+                LocalDate.of(2020, 3, 1), new BigDecimal("8000"), "含P0",
+                List.of(new CompProfileItemDTO("P0", new BigDecimal("100")))));
+
+        generateService.startGenerate(periodId, OPERATOR);
+        Long recordId = recordIdOf("E001");
+        int version = jdbc.queryForObject(
+                "SELECT version_no FROM pay_record WHERE id = ?", Integer.class, recordId);
+        recordService.applyChangeset(periodId, new ChangesetReq(List.of(
+                new ChangesetChange(recordId, version, List.of(new ChangesetItem("P0", "200"))))));
+
+        // 重新生成：档案里的 P0 + 既有变动 P0 不能变成两行（否则撞 uk_record_item）
+        Long runId = generateService.startGenerate(periodId, OPERATOR);
+
+        assertThat(generateService.progress(runId).status()).isEqualTo("SUCCESS");
+        assertThat(itemCount(recordId, "P0")).isEqualTo(1);
+        assertThat(itemAmount("E001", "P0")).isEqualByComparingTo("200.00");
+    }
+
+    private Long employeeIdByEmpNo(String empNo) {
+        return jdbc.queryForObject("SELECT id FROM emp_employee WHERE emp_no = ?",
+                Long.class, empNo);
+    }
+
+    private Long recordIdOf(String empNo) {
+        return jdbc.queryForObject("SELECT id FROM pay_record WHERE period_id = ? AND emp_no = ?",
+                Long.class, periodId, empNo);
+    }
+
+    private int itemCountOfPeriod() {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pay_record_item i
+                  JOIN pay_record r ON r.id = i.record_id
+                 WHERE r.period_id = ?
+                """, Integer.class, periodId);
+    }
+
+    private int itemCount(Long recordId, String itemCode) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pay_record_item WHERE record_id = ? AND item_code = ?",
+                Integer.class, recordId, itemCode);
     }
 
     private String itemSource(Long recordId, String itemCode) {
