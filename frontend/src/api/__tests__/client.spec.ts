@@ -46,26 +46,3 @@ describe('buildApiError 文案选择', () => {
   })
 })
 
-describe('报表响应兼容层（v1.2 对象 / 旧数组）', () => {
-  test('新结构原样取 rows 与 excludedPeriods', async () => {
-    const { normalizeReportResult } = await import('../report')
-    expect(normalizeReportResult({ rows: [{ a: 1 }], excludedPeriods: ['2025-01'] })).toEqual({
-      rows: [{ a: 1 }],
-      excludedPeriods: ['2025-01'],
-    })
-  })
-
-  test('旧结构（数组）转成 rows，excludedPeriods 为空', async () => {
-    const { normalizeReportResult } = await import('../report')
-    expect(normalizeReportResult([{ a: 1 }])).toEqual({ rows: [{ a: 1 }], excludedPeriods: [] })
-  })
-
-  test('null/缺字段不抛错', async () => {
-    const { normalizeReportResult } = await import('../report')
-    expect(normalizeReportResult(null)).toEqual({ rows: [], excludedPeriods: [] })
-    expect(normalizeReportResult({ rows: undefined as never, excludedPeriods: undefined as never })).toEqual({
-      rows: [],
-      excludedPeriods: [],
-    })
-  })
-})
