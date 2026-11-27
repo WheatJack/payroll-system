@@ -50,7 +50,9 @@ info:
         JSON 统一响应包**，`code` 与 HTTP 状态码一致。其余端点一律使用统一响应包。
     11. **权限点**：功能权限点清单见 `PermissionCode`。
         系统管理新增 `sys:user:view` / `sys:user:edit` / `sys:role:view` /
-        `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit`。
+        `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit` /
+        `sys:config:view` / `sys:config:edit`。
+        其中 `sys:role:grant:all` 与 `sys:config:edit` 属高危权限档。
         任何授权操作都不得超出操作者自身的权限点与数据范围（越权返回 403）；
         `dataScope=ALL` 只能由持有 `sys:role:grant:all` 的操作者授予。
   contact:
@@ -80,7 +82,8 @@ tags:
     description: |
       M1.5 能力：用户、角色、部门、法人主体管理。
       权限点：`sys:user:view` / `sys:user:edit` / `sys:role:view` /
-      `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit`。
+      `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit` /
+      `sys:config:view` / `sys:config:edit`。
 security:
   - bearerAuth: []
 servers:
@@ -1632,6 +1635,75 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/v1/configs:
+    get:
+      tags: [系统管理]
+      summary: 系统参数列表
+      description: |
+        需要 `sys:config:view`。返回全部业务参数及其类型、说明与是否可编辑。
+        当前参数清单与取值范围：
+        - `payroll.monthly-payable-days`（DECIMAL，默认 `21.75`）：月平均计薪天数，
+          取值 > 0 且 ≤ 31；
+        - `payroll.seniority-pay-per-year`（DECIMAL，默认 `100`）：工龄工资每年金额，
+          取值 ≥ 0；
+        - `payroll.calendar.holidays`（DATE_LIST，默认空）：法定节假日，逗号分隔的
+          ISO 日期（如 `2026-01-01,2026-02-17`），用于计薪天数计算。
+      operationId: listConfigs
+      x-milestone: M1.5
+      responses:
+        '200':
+          description: 参数列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultConfigList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/configs/{key}:
+    put:
+      tags: [系统管理]
+      summary: 修改系统参数
+      description: |
+        需要 `sys:config:edit`（高危，与 `sys:role:grant:all` 同档）。
+        `editable=false` 的参数返回 403；`value` 与 `valueType` 格式不符返回 400；
+        未知 key 返回 400。修改后立即生效并写审计日志。
+      operationId: updateConfig
+      x-milestone: M1.5
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: 参数键，如 payroll.monthly-payable-days
+          schema:
+            type: string
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigUpdateRequest'
+      responses:
+        '200':
+          description: 修改成功，返回更新后的参数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1766,7 +1838,8 @@ components:
         - 导入导出：`payroll:import:submit`、`payroll:export`
         - 敏感字段：`payroll:sensitive:view`
         - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
-          `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`
+          `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
+          `sys:config:view`、`sys:config:edit`
       enum:
         - 'payroll:record:view'
         - 'payroll:record:edit'
@@ -1782,6 +1855,8 @@ components:
         - 'sys:role:grant:all'
         - 'sys:dept:edit'
         - 'sys:company:edit'
+        - 'sys:config:view'
+        - 'sys:config:edit'
       maxLength: 64
       example: sys:user:view
 
@@ -2915,6 +2990,44 @@ components:
           description: 所属模块
           enum: [PAYROLL, SYS]
 
+    ConfigValueType:
+      type: string
+      description: 参数值类型
+      enum: [DECIMAL, INT, STRING, DATE_LIST]
+
+    ConfigItem:
+      type: object
+      description: 业务参数。`value` 一律为字符串，按 `valueType` 解析。
+      required: [key, value, valueType, description, editable]
+      properties:
+        key:
+          type: string
+          maxLength: 128
+          example: payroll.monthly-payable-days
+        value:
+          type: string
+          maxLength: 1024
+          example: '21.75'
+        valueType:
+          $ref: '#/components/schemas/ConfigValueType'
+        description:
+          type: string
+          maxLength: 255
+        editable:
+          type: boolean
+          description: false 时修改返回 403
+
+    ConfigUpdateRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: string
+          maxLength: 1024
+          description: |
+            按参数 `valueType` 校验：DECIMAL 为十进制字符串、INT 为整数、
+            STRING 原样保存、DATE_LIST 为逗号分隔的 ISO 日期（`YYYY-MM-DD`）。
+
     User:
       type: object
       description: 系统用户。密码哈希永不返回；手机号只返回掩码。
@@ -3619,3 +3732,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PermissionItem'
+
+    ResultConfigList:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigItem'
+
+    ResultConfig:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/ConfigItem'
