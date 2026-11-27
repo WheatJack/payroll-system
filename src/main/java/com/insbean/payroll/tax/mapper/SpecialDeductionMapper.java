@@ -18,4 +18,11 @@ public interface SpecialDeductionMapper extends BaseMapper<SpecialDeductionEntit
                AND (effective_to IS NULL OR effective_to >= #{date})
             """)
     BigDecimal sumEffectiveAt(@Param("employeeId") Long employeeId, @Param("date") LocalDate date);
+
+    @Select("""
+            SELECT * FROM emp_special_deduction
+             WHERE employee_id = #{employeeId}
+             ORDER BY effective_from DESC, id
+            """)
+    java.util.List<SpecialDeductionEntity> listByEmployee(@Param("employeeId") Long employeeId);
 }

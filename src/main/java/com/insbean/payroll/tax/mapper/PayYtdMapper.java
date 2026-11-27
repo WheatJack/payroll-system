@@ -11,6 +11,16 @@ import java.math.BigDecimal;
 
 public interface PayYtdMapper extends BaseMapper<PayYtdEntity> {
 
+    @Select("""
+            <script>
+            SELECT * FROM pay_ytd
+             WHERE tax_year = #{taxYear} AND employee_id IN
+               <foreach collection="employeeIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+            </script>
+            """)
+    java.util.List<PayYtdEntity> listByYearAndEmployees(@Param("taxYear") int taxYear,
+                                                        @Param("employeeIds") java.util.List<Long> employeeIds);
+
     @Select("SELECT * FROM pay_ytd WHERE employee_id = #{employeeId} AND tax_year = #{taxYear}")
     PayYtdEntity findByEmployeeAndYear(@Param("employeeId") Long employeeId,
                                        @Param("taxYear") int taxYear);

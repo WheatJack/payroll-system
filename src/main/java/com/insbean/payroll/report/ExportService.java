@@ -23,6 +23,8 @@ import com.insbean.payroll.report.dto.ReportExportParams;
 import com.insbean.payroll.report.dto.ReportQuery;
 import com.insbean.payroll.security.CurrentUser;
 import com.insbean.payroll.security.DataScopeEnforcer;
+import com.insbean.payroll.tax.AnnualTaxReportService;
+import com.insbean.payroll.tax.dto.AnnualTaxRow;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -68,6 +70,7 @@ public class ExportService {
     private final AuditService auditService;
     private final DataScopeEnforcer dataScope;
     private final ExcelWriter excelWriter;
+    private final AnnualTaxReportService annualTaxReportService;
 
     public ExportService(ReportService reportService,
                          PayRecordMapper recordMapper,
@@ -78,7 +81,8 @@ public class ExportService {
                          ObjectMapper objectMapper,
                          AuditService auditService,
                          DataScopeEnforcer dataScope,
-                         ExcelWriter excelWriter) {
+                         ExcelWriter excelWriter,
+                         AnnualTaxReportService annualTaxReportService) {
         this.reportService = reportService;
         this.recordMapper = recordMapper;
         this.recordItemMapper = recordItemMapper;
@@ -89,6 +93,7 @@ public class ExportService {
         this.auditService = auditService;
         this.dataScope = dataScope;
         this.excelWriter = excelWriter;
+        this.annualTaxReportService = annualTaxReportService;
     }
 
     public PreparedExport export(ExportRequest request) {
@@ -136,6 +141,17 @@ public class ExportService {
                 sheets = List.of(annualSheet(params.year(), rows, sheetCompanyId));
                 String group = rows.isEmpty() ? "EMP" : rows.get(0).groupBy();
                 filename = "annual-" + params.year() + "-" + group + "-" + stamp + ".xlsx";
+                description = describe(type, params);
+            }
+            case "ANNUAL_TAX" -> {
+                if (params.year() == null || !params.year().matches(YEAR_PATTERN)) {
+                    throw new BizException(400, "year 必填且格式为 YYYY");
+                }
+                List<AnnualTaxRow> rows = annualTaxReportService.annualTax(
+                        params.year(), params.employeeIds(), params.deptId());
+                dataRows = rows.size();
+                sheets = List.of(annualTaxSheet(rows));
+                filename = "annual-tax-" + params.year() + "-" + stamp + ".xlsx";
                 description = describe(type, params);
             }
             case "PERIOD_SHEET" -> {
@@ -239,6 +255,28 @@ public class ExportService {
             return row;
         }).toList();
         return new ExcelWriter.SheetData(byEmployee ? "年度汇总-按人" : "年度汇总-按部门", columns, data);
+    }
+
+    private ExcelWriter.SheetData annualTaxSheet(List<AnnualTaxRow> rows) {
+        List<ExcelWriter.Column> columns = List.of(
+                ExcelWriter.Column.text("工号"),
+                ExcelWriter.Column.text("姓名"),
+                ExcelWriter.Column.text("部门"),
+                ExcelWriter.Column.integer("计薪月数"),
+                ExcelWriter.Column.money("累计收入"),
+                ExcelWriter.Column.money("累计减除费用"),
+                ExcelWriter.Column.money("累计社保"),
+                ExcelWriter.Column.money("累计公积金"),
+                ExcelWriter.Column.money("累计专项附加扣除"),
+                ExcelWriter.Column.money("应纳税所得额"),
+                ExcelWriter.Column.money("累计已预扣个税"),
+                ExcelWriter.Column.money("最近一期个税"),
+                ExcelWriter.Column.rate("实际税负率"));
+        List<List<Object>> data = rows.stream().map(r -> listOf(
+                r.empNo(), r.empName(), r.deptName(), r.paidMonths(), r.cumIncome(),
+                r.cumBasicDeduction(), r.cumSocial(), r.cumFund(), r.cumSpecial(), r.taxable(),
+                r.cumTax(), r.lastTax(), r.effectiveRate())).toList();
+        return new ExcelWriter.SheetData("年度个税核对", columns, data);
     }
 
     // ------------------------------------------------------------------ PERIOD_SHEET
@@ -577,6 +615,15 @@ public class ExportService {
                 }
                 if (params.deptId() != null) {
                     sb.append(";deptId=").append(params.deptId());
+                }
+            }
+            case "ANNUAL_TAX" -> {
+                sb.append(";year=").append(params.year());
+                if (params.deptId() != null) {
+                    sb.append(";deptId=").append(params.deptId());
+                }
+                if (params.employeeIds() != null) {
+                    sb.append(";employeeIds=").append(params.employeeIds());
                 }
             }
             case "PERIOD_SHEET" -> {

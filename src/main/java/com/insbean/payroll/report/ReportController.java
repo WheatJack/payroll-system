@@ -4,6 +4,8 @@ import com.insbean.payroll.common.Result;
 import com.insbean.payroll.report.dto.ExportRequest;
 import com.insbean.payroll.report.dto.ReportQuery;
 import com.insbean.payroll.security.RequirePerm;
+import com.insbean.payroll.tax.AnnualTaxReportService;
+import com.insbean.payroll.tax.dto.AnnualTaxRow;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,10 +29,13 @@ public class ReportController {
 
     private final ReportService reportService;
     private final ExportService exportService;
+    private final AnnualTaxReportService annualTaxReportService;
 
-    public ReportController(ReportService reportService, ExportService exportService) {
+    public ReportController(ReportService reportService, ExportService exportService,
+                            AnnualTaxReportService annualTaxReportService) {
         this.reportService = reportService;
         this.exportService = exportService;
+        this.annualTaxReportService = annualTaxReportService;
     }
 
     @RequirePerm("payroll:record:view")
@@ -48,6 +53,16 @@ public class ReportController {
                                                 @RequestParam(required = false) Long companyId,
                                                 @RequestParam(required = false) Long deptId) {
         return Result.ok(reportService.annual(ReportQuery.annual(year, groupBy, companyId, deptId)));
+    }
+
+    /** 年度个税核对：台账累计与逐月结果的逐人对照。 */
+    @RequirePerm("payroll:record:view")
+    @GetMapping("/annual-tax")
+    public Result<List<AnnualTaxRow>> annualTax(@RequestParam String year,
+                                                @RequestParam(required = false) Long employeeId,
+                                                @RequestParam(required = false) Long deptId) {
+        return Result.ok(annualTaxReportService.annualTax(year,
+                employeeId == null ? null : List.of(employeeId), deptId));
     }
 
     /**

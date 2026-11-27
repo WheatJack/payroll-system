@@ -19,4 +19,11 @@ public interface SocialInsuranceMapper extends BaseMapper<SocialInsuranceEntity>
             """)
     SocialInsuranceEntity effectiveAt(@Param("employeeId") Long employeeId,
                                       @Param("date") LocalDate date);
+
+    @Select("""
+            SELECT * FROM emp_social_insurance
+             WHERE employee_id = #{employeeId}
+             ORDER BY effective_from DESC
+            """)
+    java.util.List<SocialInsuranceEntity> listByEmployee(@Param("employeeId") Long employeeId);
 }

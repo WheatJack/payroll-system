@@ -51,6 +51,13 @@ public interface PeriodMapper extends BaseMapper<PayPeriodEntity> {
             """)
     int releaseExpiredLeases();
 
+    /** 该主体已锁定/已归档的最大期间（用于阻止修改已锁历史）；没有则 null。 */
+    @Select("""
+            SELECT MAX(period_ym) FROM pay_period
+             WHERE company_id = #{companyId} AND status IN ('LOCKED', 'ARCHIVED')
+            """)
+    String maxLockedPeriodYm(@Param("companyId") Long companyId);
+
     /** 最近一次生成批次的状态；期间从未生成过返回 null。 */
     @Select("SELECT status FROM pay_run WHERE period_id = #{periodId} ORDER BY id DESC LIMIT 1")
     String findLatestRunStatus(@Param("periodId") Long periodId);

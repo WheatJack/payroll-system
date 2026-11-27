@@ -41,7 +41,9 @@ public class ExcelWriter {
         /** 金额，数值单元格 + #,##0.00。 */
         MONEY,
         /** 整数（人数等）。 */
-        INT
+        INT,
+        /** 比率，数值 + 4 位小数格式（如实际税负率）。 */
+        RATE
     }
 
     public record Column(String title, Kind kind) {
@@ -56,6 +58,10 @@ public class ExcelWriter {
 
         public static Column integer(String title) {
             return new Column(title, Kind.INT);
+        }
+
+        public static Column rate(String title) {
+            return new Column(title, Kind.RATE);
         }
     }
 
@@ -125,7 +131,8 @@ public class ExcelWriter {
                 Cell cell = row.createCell(i);
                 if (value instanceof BigDecimal amount) {
                     cell.setCellValue(amount.doubleValue());
-                    cell.setCellStyle(styles.money());
+                    cell.setCellStyle(data.columns().get(i).kind() == Kind.RATE
+                            ? styles.rate() : styles.money());
                     continue;
                 }
                 if (value instanceof Number number) {
@@ -144,6 +151,7 @@ public class ExcelWriter {
             case MONEY -> 14;
             case INT -> 8;
             case TEXT -> 12;
+            case RATE -> 10;
         };
         // 中文按两字符宽估算
         return Math.min(40, Math.max(base, column.title().length() * 2 + 4)) * 256;
@@ -155,11 +163,13 @@ public class ExcelWriter {
         return cleaned.length() > 31 ? cleaned.substring(0, 31) : cleaned;
     }
 
-    private record CellStyles(CellStyle header, CellStyle money, CellStyle text, CellStyle integer) {
+    private record CellStyles(CellStyle header, CellStyle money, CellStyle text,
+                              CellStyle integer, CellStyle rate) {
 
         CellStyles(SXSSFWorkbook workbook) {
             this(headerStyle(workbook), moneyStyle(workbook),
-                    plainStyle(workbook, "@"), plainStyle(workbook, "#,##0"));
+                    plainStyle(workbook, "@"), plainStyle(workbook, "#,##0"),
+                    plainStyle(workbook, "0.0000"));
         }
 
         private static CellStyle headerStyle(SXSSFWorkbook workbook) {
