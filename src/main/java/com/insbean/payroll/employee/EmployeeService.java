@@ -321,14 +321,17 @@ public class EmployeeService {
                 wholeYears(e.getWorkStartDate(), today), e.getStatus(), e.getRemark());
     }
 
-    /** 整年差（向下取整）；入职/参加工作日期为空返回 null，未来日期按 0 处理。 */
-    private static Integer wholeYears(LocalDate from, LocalDate to) {
+    /**
+     * 整年差（向下取整）→ 两位小数**字符串**（如 "6.00"）；日期为空返回 null，未来日期按 0 处理。
+     *
+     * <p>必须返回字符串：契约里该字段是 DecimalString，int 不会被 JacksonConfig 转成字符串，
+     * 前端拿到 number 会 TypeError。
+     */
+    private static String wholeYears(LocalDate from, LocalDate to) {
         if (from == null) {
             return null;
         }
-        if (from.isAfter(to)) {
-            return 0;
-        }
-        return Period.between(from, to).getYears();
+        int years = from.isAfter(to) ? 0 : Period.between(from, to).getYears();
+        return String.format(java.util.Locale.ROOT, "%d.00", years);
     }
 }

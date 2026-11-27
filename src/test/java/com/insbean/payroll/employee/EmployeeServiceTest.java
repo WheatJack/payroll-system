@@ -179,9 +179,9 @@ class EmployeeServiceTest extends AbstractDbTest {
         LocalDate today = LocalDate.now();
         assertThat(dto.deptName()).isEqualTo("综合部");
         assertThat(dto.seniorityYears())
-                .isEqualTo(Period.between(LocalDate.of(2020, 3, 1), today).getYears());
+                .isEqualTo(Period.between(LocalDate.of(2020, 3, 1), today).getYears() + ".00");
         assertThat(dto.socialSeniorityYears())
-                .isEqualTo(Period.between(LocalDate.of(2018, 7, 1), today).getYears());
+                .isEqualTo(Period.between(LocalDate.of(2018, 7, 1), today).getYears() + ".00");
     }
 
     @Test
@@ -194,7 +194,7 @@ class EmployeeServiceTest extends AbstractDbTest {
         EmployeeDTO dto = service.get(id);
         assertThat(dto.socialSeniorityYears()).isNull();
         assertThat(dto.seniorityYears())
-                .isEqualTo(Period.between(LocalDate.of(2024, 5, 20), LocalDate.now()).getYears());
+                .isEqualTo(Period.between(LocalDate.of(2024, 5, 20), LocalDate.now()).getYears() + ".00");
     }
 
     @Test

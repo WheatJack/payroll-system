@@ -139,6 +139,27 @@ class PayrollFlowIT extends AbstractDbTest {
 
     // ------------------------------------------------------------------ 客户端动作
 
+    @Test
+    void 人员与编制台的工龄以两位小数字符串返回() throws Exception {
+        String token = login("hr01");
+        long empId = createEmployee(token, "E001", ID_NO);
+
+        // 契约是 DecimalString：必须是文本且两位小数，不能是 number（前端会 value.trim()）
+        JsonNode employee = getJson("/api/v1/employees/" + empId, token);
+        assertThat(employee.path("seniorityYears").isTextual()).isTrue();
+        assertThat(employee.path("seniorityYears").asText()).matches("^[0-9]{1,3}\\.[0-9]{2}$");
+        // 未填 workStartDate → 社会工龄为 null
+        assertThat(employee.path("socialSeniorityYears").isNull()).isTrue();
+
+        createCompProfile(token, empId, "8000.00", LocalDate.of(2020, 3, 1));
+        long periodId = createPeriod(token, "2026-11");
+        waitRun(token, generate(token, periodId));
+
+        JsonNode row = grid(token, periodId).path("rows").get(0);
+        assertThat(row.path("seniorityYears").isTextual()).isTrue();
+        assertThat(row.path("seniorityYears").asText()).isEqualTo("6.00");
+    }
+
     private String login(String username) throws Exception {
         JsonNode data = postJson("/api/v1/auth/login", null, Map.of(
                 "username", username,
