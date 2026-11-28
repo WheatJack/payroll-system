@@ -23,7 +23,8 @@ services:
       # 仅在数据卷为空时自动执行一次
       - ./db/schema-mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-ppayroll_root_2026"]
+      # -p 明文会进 docker inspect；改用 MYSQL_PWD 环境变量形式，且口令跟随 .env
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h127.0.0.1 -uroot --silent"]
       interval: 5s
       timeout: 5s
       retries: 30
