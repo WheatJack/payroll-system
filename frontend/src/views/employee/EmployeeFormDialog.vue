@@ -331,8 +331,9 @@ async function submit() {
               type="date"
               value-format="YYYY-MM-DD"
               class="full-width"
-              placeholder="用于工龄计算"
+              placeholder="选择日期"
             />
+            <div class="field-hint">参加工作时间（用于社会工龄展示，不参与工资计算）</div>
           </el-form-item>
         </el-col>
         <el-col :span="12">

@@ -1,3 +1,19 @@
+import type { RunProgress } from '@/api/models'
+
+/**
+ * 生成进度百分比：跳过的人不会出现在 success/failed 里，旧算法永远到不了 100%。
+ * 完成（SUCCESS）直接 100%；进行中把 skipped 计入已完成数。
+ */
+export function runProgressPercent(
+  progress: Pick<RunProgress, 'status' | 'total' | 'success' | 'failed'> & { skipped?: Record<string, string> } | null | undefined,
+): number {
+  if (!progress || !progress.total || progress.total <= 0) return 0
+  if (progress.status === 'SUCCESS') return 100
+  const skipped = Object.keys(progress.skipped ?? {}).length
+  const done = progress.success + progress.failed + skipped
+  return Math.max(0, Math.min(100, Math.round((done / progress.total) * 100)))
+}
+
 /**
  * 生成批次的业务警告（v1.2 `RunProgress.warnings`）。
  *

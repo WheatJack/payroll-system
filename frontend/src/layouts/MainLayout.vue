@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useLogout } from '@/composables/useLogout'
+import { dataScopeLabel } from '@/utils/system'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -87,7 +88,7 @@ async function logout() {
           <span class="crumb-current">{{ route.meta.title ?? '' }}</span>
         </div>
         <div class="user-area">
-          <el-tag size="small" type="info">{{ auth.user?.dataScope ?? '' }}</el-tag>
+          <el-tag size="small" type="info">{{ dataScopeLabel(auth.user?.dataScope) }}</el-tag>
           <span class="user-name">{{ auth.realName || '未登录' }}</span>
           <el-button link type="primary" @click="logout">退出登录</el-button>
         </div>

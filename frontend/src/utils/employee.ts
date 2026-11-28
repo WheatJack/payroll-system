@@ -42,3 +42,20 @@ export function resolveEmployeeCompanyId(
 export function employeeDeptLabel(row: Employee): string {
   return row.deptName || row.deptId || '—'
 }
+
+/** 本地日期 YYYY-MM-DD（与生效日期同格式，可字符串比较）。 */
+export function localToday(now = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * 薪酬档案「当前生效」卡片的后缀：未来生效的调薪显示（MM-DD 起生效），
+ * 避免把次月才生效的金额误认为本月到手金额。
+ */
+export function effectiveDateSuffix(effectiveFrom: string | null | undefined, today = localToday()): string {
+  if (!effectiveFrom) return ''
+  if (effectiveFrom <= today) return ''
+  return `（${effectiveFrom.slice(5)} 起生效）`
+}

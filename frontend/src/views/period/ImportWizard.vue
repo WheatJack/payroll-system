@@ -309,7 +309,7 @@ onBeforeUnmount(stopPolling)
         <el-button type="primary" plain :icon="Download" :loading="downloadingTemplate" @click="downloadTemplate">
           下载模板 xlsx
         </el-button>
-        <span class="muted">列头由工资项字典动态生成；单文件 ≤ 10MB、≤ 5 万行</span>
+        <span class="muted">列头由工资项字典动态生成；单文件 ≤ 50MB、≤ 5 万行</span>
       </div>
       <div class="template-help">
         <div class="help-title">填表说明</div>
@@ -320,9 +320,7 @@ onBeforeUnmount(stopPolling)
           <li>日期统一使用 <code>YYYY-MM-DD</code>（如 <code>2026-11-01</code>）。</li>
           <li>留空的单元格表示本次不填写该项；预校验失败的行不会写入。</li>
         </ul>
-        <div class="muted help-note">
-          模板 xlsx 由后端生成（列头来自工资项字典）；若要把说明写进文件本身，需要后端在模板首行补充。
-        </div>
+        <div class="muted help-note">模板列头由工资项字典自动生成；如需调整模板请联系系统管理员。</div>
       </div>
     </div>
 
