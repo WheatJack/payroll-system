@@ -158,10 +158,16 @@ class TaxServiceTest extends AbstractDbTest {
 
         periodService.unlock(periodId, 2L, "复核重算");
 
+        // 解锁：期间回到 EDITING，锁定人/锁定时间必须清空（否则列表仍显示"锁定人"）
+        var unlocked = periodService.get(periodId);
+        assertThat(unlocked.status()).isEqualTo("EDITING");
+        assertThat(unlocked.lockedBy()).isNull();
+        assertThat(unlocked.lockedAt()).isNull();
+        assertThat(unlocked.unlockReason()).isEqualTo("复核重算");
+        // 台账减回后归零行被清掉，不留 0 值残留
         assertThat(jdbc.queryForObject("""
-                SELECT cum_income + cum_social + cum_fund + cum_special_deduction + cum_tax
-                  FROM pay_ytd WHERE employee_id = ? AND tax_year = 2026
-                """, BigDecimal.class, empId)).isEqualByComparingTo("0.00");
+                SELECT COUNT(*) FROM pay_ytd WHERE employee_id = ? AND tax_year = 2026
+                """, Integer.class, empId)).isZero();
     }
 
     @Test

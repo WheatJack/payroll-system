@@ -160,7 +160,7 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(users.path("data").path("total").asInt()).isEqualTo(3);
 
         JsonNode permissions = getJson("/api/v1/permissions", admin);
-        assertThat(permissions.path("data").size()).isEqualTo(16);
+        assertThat(permissions.path("data").size()).isEqualTo(17);
 
         JsonNode roles = getJson("/api/v1/roles", admin);
         assertThat(roles.path("data").size()).isGreaterThanOrEqualTo(4);
@@ -512,6 +512,30 @@ class SystemOpsFlowIT extends AbstractDbTest {
         assertThat(body.path("data").path("rows").size()).isEqualTo(1);
         assertThat(body.path("data").path("excludedPeriods").get(0).asText())
                 .isEqualTo("2026-12");
+    }
+
+    @Test
+    void 审计流水可查且需要权限() throws Exception {
+        lockedPayroll();
+        String admin = login("admin");
+
+        JsonNode page = getJson("/api/v1/audit-logs", admin, "action", "LOCK");
+        assertThat(page.path("data").path("total").isNumber()).isTrue();
+        assertThat(page.path("data").path("records").size()).isPositive();
+        page.path("data").path("records").forEach(r ->
+                assertThat(r.path("action").asText()).isEqualTo("LOCK"));
+
+        // 按操作人过滤
+        JsonNode byOperator = getJson("/api/v1/audit-logs", admin, "operator", "薪酬专员");
+        assertThat(byOperator.path("data").path("records").size()).isPositive();
+        JsonNode none = getJson("/api/v1/audit-logs", admin, "operator", "不存在的人");
+        assertThat(none.path("data").path("records").size()).isZero();
+
+        // 薪酬专员没有 sys:audit:view
+        String hr01 = login("hr01");
+        assertThat(mvc.perform(get("/api/v1/audit-logs")
+                        .header("Authorization", "Bearer " + hr01))
+                .andReturn().getResponse().getStatus()).isEqualTo(403);
     }
 
     @Test

@@ -568,7 +568,7 @@ INSERT INTO sys_role_grant (role_id, perm_code) VALUES
   (5, 'sys:user:view'), (5, 'sys:user:edit'),
   (5, 'sys:role:view'), (5, 'sys:role:edit'), (5, 'sys:role:grant:all'),
   (5, 'sys:dept:edit'), (5, 'sys:company:edit'),
-  (5, 'sys:config:view'), (5, 'sys:config:edit');
+  (5, 'sys:config:view'), (5, 'sys:config:edit'), (5, 'sys:audit:view');
 
 INSERT INTO pay_tax_bracket (year_min, year_max, rate, quick_deduction, sort_no) VALUES
   (0, 36000, 0.0300, 0, 10),

@@ -80,6 +80,7 @@ public class YtdService {
                         special,
                         byCode.getOrDefault(TAX, BigDecimal.ZERO),
                         period.getPeriodYm());
+                ytdMapper.deleteIfEmpty(record.getEmployeeId(), taxYear);
             } else {
                 ytdMapper.addContribution(record.getEmployeeId(), taxYear,
                         record.getCompanyId(),

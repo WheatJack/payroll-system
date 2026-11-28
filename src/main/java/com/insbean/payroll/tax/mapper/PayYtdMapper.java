@@ -21,6 +21,15 @@ public interface PayYtdMapper extends BaseMapper<PayYtdEntity> {
     java.util.List<PayYtdEntity> listByYearAndEmployees(@Param("taxYear") int taxYear,
                                                         @Param("employeeIds") java.util.List<Long> employeeIds);
 
+    /** 解锁减回后清掉归零行，避免台账里躺一堆 0 值残留（期初行有累计值，不会被误删）。 */
+    @org.apache.ibatis.annotations.Delete("""
+            DELETE FROM pay_ytd
+             WHERE employee_id = #{employeeId} AND tax_year = #{taxYear}
+               AND paid_months = 0 AND cum_income = 0 AND cum_social = 0
+               AND cum_fund = 0 AND cum_special_deduction = 0 AND cum_tax = 0
+            """)
+    int deleteIfEmpty(@Param("employeeId") Long employeeId, @Param("taxYear") int taxYear);
+
     @Select("SELECT * FROM pay_ytd WHERE employee_id = #{employeeId} AND tax_year = #{taxYear}")
     PayYtdEntity findByEmployeeAndYear(@Param("employeeId") Long employeeId,
                                        @Param("taxYear") int taxYear);

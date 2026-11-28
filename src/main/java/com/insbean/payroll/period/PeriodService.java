@@ -268,11 +268,14 @@ public class PeriodService {
         if (status != PeriodStatus.LOCKED) {
             throw new BizException(409, "只有已锁定的期间可以解锁");
         }
-        period.setStatus(PeriodStatus.EDITING.name());
-        period.setUnlockReason(reason.trim());
-        period.setLockedBy(null);
-        period.setLockedAt(null);
-        periodMapper.updateById(period);
+        // MyBatis-Plus updateById 默认忽略 null 字段：locked_by/locked_at 必须显式 SET NULL，
+        // 否则期间回到 EDITING 却仍显示"锁定人"，用户会以为还锁着
+        periodMapper.update(null, Wrappers.<PayPeriodEntity>lambdaUpdate()
+                .set(PayPeriodEntity::getStatus, PeriodStatus.EDITING.name())
+                .set(PayPeriodEntity::getUnlockReason, reason.trim())
+                .set(PayPeriodEntity::getLockedBy, null)
+                .set(PayPeriodEntity::getLockedAt, null)
+                .eq(PayPeriodEntity::getId, periodId));
         // 解锁回退为编制中，记录状态随之回到 DRAFT
         syncRecordStatus(periodId, "CONFIRMED", "DRAFT");
         // 解锁把本期从累计台账减回，保证重算可逆
@@ -280,7 +283,8 @@ public class PeriodService {
         // 解锁是最高危的动作（重开已锁定期间），原因必须进审计
         auditService.record("PERIOD", periodId, "UNLOCK", "unlock_reason",
                 PeriodStatus.LOCKED.name(), reason.trim());
-        return toDto(period);
+        // 上面用 wrapper 直接 UPDATE，实体里的 status/locked_by 仍是旧值，必须重新查一次再转 DTO
+        return toDto(requirePeriod(periodId));
     }
 
     private void syncRecordStatus(Long periodId, String from, String to) {

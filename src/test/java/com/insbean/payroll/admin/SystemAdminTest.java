@@ -49,7 +49,8 @@ class SystemAdminTest extends AbstractDbTest {
             "payroll:period:unlock", "payroll:import:submit", "payroll:export",
             "sys:user:view", "sys:user:edit",
             "sys:role:view", "sys:role:edit", "sys:role:grant:all",
-            "sys:dept:edit", "sys:company:edit", "sys:config:view", "sys:config:edit");
+            "sys:dept:edit", "sys:company:edit", "sys:config:view", "sys:config:edit",
+            "sys:audit:view");
 
     @Autowired
     private UserAdminService userAdminService;
@@ -478,7 +479,7 @@ class SystemAdminTest extends AbstractDbTest {
     @Test
     void 权限点目录由后端给出() {
         List<PermissionItemDTO> all = PermissionCatalog.all();
-        assertThat(all).hasSize(16);
+        assertThat(all).hasSize(17);
         assertThat(all).extracting(PermissionItemDTO::code)
                 .contains("payroll:record:view", "sys:user:edit", "sys:role:grant:all",
                         "sys:config:edit", "payroll:sensitive:view");

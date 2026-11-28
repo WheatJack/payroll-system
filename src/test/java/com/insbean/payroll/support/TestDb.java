@@ -106,7 +106,7 @@ public class TestDb {
                   (4, 'sys:user:view'), (4, 'sys:user:edit'),
                   (4, 'sys:role:view'), (4, 'sys:role:edit'), (4, 'sys:role:grant:all'),
                   (4, 'sys:dept:edit'), (4, 'sys:company:edit'),
-                  (4, 'sys:config:view'), (4, 'sys:config:edit')
+                  (4, 'sys:config:view'), (4, 'sys:config:edit'), (4, 'sys:audit:view')
                 """);
 
         String hash = passwordEncoder.encode(PASSWORD);

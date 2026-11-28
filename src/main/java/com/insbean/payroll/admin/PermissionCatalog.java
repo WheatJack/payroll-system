@@ -30,6 +30,7 @@ public final class PermissionCatalog {
             new PermissionItemDTO("sys:role:grant:all", "授予集团数据范围", "SYS"),
             new PermissionItemDTO("sys:dept:edit", "编辑部门", "SYS"),
             new PermissionItemDTO("sys:company:edit", "编辑法人主体", "SYS"),
+            new PermissionItemDTO("sys:audit:view", "查看审计日志", "SYS"),
             new PermissionItemDTO("sys:config:view", "查看系统参数", "SYS"),
             new PermissionItemDTO("sys:config:edit", "编辑系统参数", "SYS"));
 

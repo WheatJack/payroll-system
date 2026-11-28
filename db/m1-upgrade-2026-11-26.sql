@@ -75,7 +75,9 @@ SELECT r.id, p.code
         UNION ALL SELECT 'sys:role:edit'
         UNION ALL SELECT 'sys:role:grant:all'
         UNION ALL SELECT 'sys:dept:edit'
-        UNION ALL SELECT 'sys:company:edit') p
+        UNION ALL SELECT 'sys:company:edit'
+        UNION ALL SELECT 'sys:config:view'
+        UNION ALL SELECT 'sys:config:edit') p
  WHERE r.company_id = 1 AND r.role_code = 'SYS_ADMIN' AND r.deleted = 0;
 
 -- 12) 系统参数表（可在线调整月计薪天数 / 工龄单价 / 节假日）
@@ -242,3 +244,9 @@ ALTER TABLE pay_ytd
 --   (employee_id, tax_year, company_id, cum_income, cum_social, cum_fund,
 --    cum_special_deduction, cum_tax, paid_months, last_period_ym)
 -- VALUES (123, 2026, 1, 80000, 9000, 6000, 12000, 1000, 8, '2026-08');
+
+-- 22) 系统管理员补 sys:audit:view（审计流水查看入口）
+INSERT IGNORE INTO sys_role_grant (role_id, perm_code)
+SELECT r.id, 'sys:audit:view'
+  FROM sys_role r
+ WHERE r.company_id = 1 AND r.role_code = 'SYS_ADMIN' AND r.deleted = 0;
