@@ -52,7 +52,7 @@ info:
     11. **权限点**：功能权限点清单见 `PermissionCode`。
         系统管理新增 `sys:user:view` / `sys:user:edit` / `sys:role:view` /
         `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit` /
-        `sys:config:view` / `sys:config:edit`。
+        `sys:config:view` / `sys:config:edit` / `sys:audit:view`。
         其中 `sys:role:grant:all` 与 `sys:config:edit` 属高危权限档。
         任何授权操作都不得超出操作者自身的权限点与数据范围（越权返回 403）；
         `dataScope=ALL` 只能由持有 `sys:role:grant:all` 的操作者授予。
@@ -84,7 +84,7 @@ tags:
       M1.5 能力：用户、角色、部门、法人主体管理。
       权限点：`sys:user:view` / `sys:user:edit` / `sys:role:view` /
       `sys:role:edit` / `sys:role:grant:all` / `sys:dept:edit` / `sys:company:edit` /
-      `sys:config:view` / `sys:config:edit`。
+      `sys:config:view` / `sys:config:edit` / `sys:audit:view`。
   - name: 个税社保
     description: M2.5 能力：参保信息、专项附加扣除与年度个税核对
 security:
@@ -2019,6 +2019,78 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/v1/audit-logs:
+    get:
+      tags: [系统管理]
+      summary: 审计流水查询
+      description: |
+        需要 `sys:audit:view`（默认授予 SYS_ADMIN 角色）。按条件分页查询审计流水。
+        `action` 取值：`CREATE` / `UPDATE` / `DELETE` / `LOCK` / `UNLOCK` /
+        `EXPORT` / `VIEW` / `VIEW_SENSITIVE` / `GRANT_REPLACE`。
+        金额类 `oldValue` / `newValue` 为十进制字符串；审计表不存储证件号明文，无需额外脱敏。
+        分页字段 `total` 为 JSON number（整数），不是字符串。
+      operationId: listAuditLogs
+      x-milestone: M2.5
+      parameters:
+        - name: bizType
+          in: query
+          required: false
+          description: 业务类型，如 PAYROLL_PERIOD / EMPLOYEE / IMPORT_BATCH / ROLE
+          schema:
+            type: string
+            maxLength: 64
+        - name: action
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditAction'
+        - name: operator
+          in: query
+          required: false
+          description: 操作人用户名，模糊匹配
+          schema:
+            type: string
+            maxLength: 64
+        - name: start
+          in: query
+          required: false
+          description: 起始日期（含），YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: false
+          description: 结束日期（含），YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Current'
+        - name: size
+          in: query
+          required: false
+          description: 每页条数，上限 200
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: 审计流水分页结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultAuditLogPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /api/v1/configs:
     get:
       tags: [系统管理]
@@ -2223,7 +2295,7 @@ components:
         - 敏感字段：`payroll:sensitive:view`（高危，每次查看写审计）
         - 系统管理：`sys:user:view`、`sys:user:edit`、`sys:role:view`、
           `sys:role:edit`、`sys:role:grant:all`、`sys:dept:edit`、`sys:company:edit`、
-          `sys:config:view`、`sys:config:edit`
+          `sys:config:view`、`sys:config:edit`、`sys:audit:view`
       enum:
         - 'payroll:record:view'
         - 'payroll:record:edit'
@@ -2241,6 +2313,7 @@ components:
         - 'sys:company:edit'
         - 'sys:config:view'
         - 'sys:config:edit'
+        - 'sys:audit:view'
       maxLength: 64
       example: sys:user:view
 
@@ -3649,6 +3722,70 @@ components:
           description: 所属模块
           enum: [PAYROLL, SYS]
 
+    AuditAction:
+      type: string
+      description: 审计动作
+      enum: [CREATE, UPDATE, DELETE, LOCK, UNLOCK, EXPORT, VIEW, VIEW_SENSITIVE, GRANT_REPLACE]
+
+    AuditLog:
+      type: object
+      description: |
+        审计流水。金额类 `oldValue` / `newValue` 为十进制字符串；
+        审计表不存储证件号明文。
+      required:
+        [id, bizType, bizId, action, operatorId, operatorName, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        bizType:
+          type: string
+          maxLength: 64
+          example: PAYROLL_PERIOD
+        bizId:
+          $ref: '#/components/schemas/Id'
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        fieldName:
+          type: string
+          nullable: true
+          maxLength: 64
+        oldValue:
+          type: string
+          nullable: true
+          maxLength: 1024
+        newValue:
+          type: string
+          nullable: true
+          maxLength: 1024
+        operatorId:
+          $ref: '#/components/schemas/Id'
+        operatorName:
+          type: string
+          maxLength: 64
+        ip:
+          type: string
+          nullable: true
+          maxLength: 64
+        createdAt:
+          type: string
+          format: date-time
+
+    AuditLogPage:
+      type: object
+      required: [records, total, current, size]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        total:
+          type: integer
+          description: 总条数，JSON number（int，不是字符串）
+        current:
+          type: integer
+        size:
+          type: integer
+
     ConfigValueType:
       type: string
       description: 参数值类型
@@ -4508,3 +4645,15 @@ components:
           example: ok
         data:
           $ref: '#/components/schemas/AnnualTaxReportResult'
+
+    ResultAuditLogPage:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        msg:
+          type: string
+          example: ok
+        data:
+          $ref: '#/components/schemas/AuditLogPage'
